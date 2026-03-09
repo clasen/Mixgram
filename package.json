@@ -1,0 +1,51 @@
+{
+  "name": "mixgram",
+  "version": "1.0.4",
+  "description": "MCP memory server with Markdown source of truth and SQLite FTS5.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "memory",
+    "engram",
+    "markdown",
+    "sqlite",
+    "fts5",
+    "full-text-search",
+    "embeddings",
+    "semantic-search",
+    "cursor",
+    "ai-memory",
+    "antigravity",
+    "claude",
+    "code",
+    "codex",
+    "sdd",
+    "tdd",
+    "clasen"
+  ],
+  "license": "MIT",
+  "author": "Martin Clasen",
+  "type": "module",
+  "main": "index.js",
+  "bin": {
+    "mixgram": "./bin/mixgram.js"
+  },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node spec/run-tests.js",
+    "test:visual": "node spec/run-tests.js --visual"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.4.2",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^12.6.2",
+    "chokidar": "^4.0.1",
+    "gray-matter": "^4.0.3",
+    "glob": "^10.4.5",
+    "remark-parse": "^11.0.0",
+    "sqlite-vec": "^0.1.6",
+    "unified": "^11.0.5",
+    "unist-util-visit": "^5.0.0",
+    "zod": "^3.23.0"
+  }
+}
