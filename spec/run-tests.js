@@ -18,7 +18,6 @@ const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mixgram-test-'));
 const config = loadConfig({
   homeMemoryRoot: path.join(tmpDir, 'home', 'memory'),
   projectMemoryRoot: path.join(tmpDir, 'mixgram'),
-  projectsRoot: path.join(tmpDir, 'projects'),
   sqlitePath: path.join(tmpDir, '.mixgram', 'index.db')
 });
 fs.mkdirSync(path.dirname(config.sqlitePath), { recursive: true });
@@ -54,7 +53,6 @@ async function runScenarios() {
       const configSemantic = loadConfig({
         homeMemoryRoot: config.homeMemoryRoot,
         projectMemoryRoot: config.projectMemoryRoot,
-        projectsRoot: config.projectsRoot,
         sqlitePath: config.sqlitePath,
         embeddings: { enabled: true }
       });
@@ -80,7 +78,6 @@ async function runLegacySemanticKnn() {
     ? loadConfig({
         homeMemoryRoot: config.homeMemoryRoot,
         projectMemoryRoot: config.projectMemoryRoot,
-        projectsRoot: config.projectsRoot,
         sqlitePath: config.sqlitePath,
         embeddings: { enabled: true }
       })

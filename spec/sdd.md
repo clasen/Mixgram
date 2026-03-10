@@ -928,9 +928,8 @@ src/
 
 ```json
 {
-  "homeMemoryRoot": "./home/memory",
-  "projectsRoot": "./projects",
-  "sqlitePath": "./.Mixgram/index.db",
+  "homeMemoryRoot": "~/.mixgram/docs",
+  "sqlitePath": "~/.mixgram/index.db",
   "watch": true,
   "indexing": {
     "chunkSize": 1200,

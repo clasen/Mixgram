@@ -16,7 +16,7 @@ import os from 'os';
 const SUBCOMMAND = process.argv[2];
 const ARG = process.argv[3];
 
-/** Parse options after "mcp": --config, --embeddings, --watch, --home, --projects, --sqlite-path */
+/** Parse options after "mcp": --config, --embeddings, --watch, --home, --sqlite-path */
 function parseMcpArgs() {
   const args = process.argv.slice(3);
   const out = {};
@@ -33,8 +33,6 @@ function parseMcpArgs() {
       out.homeMemoryRoot = args[++i];
     } else if (a === '--project-memory' && args[i + 1]) {
       out.projectMemoryRoot = args[++i];
-    } else if (a === '--projects' && args[i + 1]) {
-      out.projectsRoot = args[++i];
     } else if (a === '--sqlite-path' && args[i + 1]) {
       out.sqlitePath = args[++i];
     }
@@ -84,7 +82,6 @@ function loadCliConfig() {
   }
   if (process.env.MIXGRAM_HOME) envOverrides.homeMemoryRoot = process.env.MIXGRAM_HOME;
   if (process.env.MIXGRAM_PROJECT_MEMORY) envOverrides.projectMemoryRoot = process.env.MIXGRAM_PROJECT_MEMORY;
-  if (process.env.MIXGRAM_PROJECTS) envOverrides.projectsRoot = process.env.MIXGRAM_PROJECTS;
   if (process.env.MIXGRAM_SQLITE_PATH) envOverrides.sqlitePath = process.env.MIXGRAM_SQLITE_PATH;
   if (process.env.MIXGRAM_WATCH === '1' || process.env.MIXGRAM_WATCH === 'true') envOverrides.watch = true;
 

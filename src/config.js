@@ -1,11 +1,19 @@
 import path from 'path';
+import os from 'os';
+
+function expandHome(p) {
+  if (typeof p !== 'string') return p;
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+    return path.join(os.homedir(), p.slice(2) || '');
+  }
+  return p;
+}
 
 const DEFAULT_CONFIG = {
-  homeMemoryRoot: './home/memory',
+  homeMemoryRoot: '~/.mixgram/shared',
   projectMemoryRoot: './mixgram',
-  projectsRoot: './projects',
-  sqlitePath: './.mixgram/index.db',
-  watch: false,
+  sqlitePath: '~/.mixgram/index.db',
+  watch: true,
   indexing: {
     chunkSize: 1200,
     chunkOverlap: 120,
@@ -42,12 +50,13 @@ const DEFAULT_CONFIG = {
 function resolvePaths(config, baseDir, projectBaseDir = null) {
   const base = baseDir || process.cwd();
   const projectBase = projectBaseDir ?? base;
+  const homeRoot = expandHome(config.homeMemoryRoot);
+  const sqlite = expandHome(config.sqlitePath);
   return {
     ...config,
-    homeMemoryRoot: path.resolve(base, config.homeMemoryRoot),
+    homeMemoryRoot: path.isAbsolute(homeRoot) ? homeRoot : path.resolve(base, homeRoot),
     projectMemoryRoot: path.resolve(projectBase, config.projectMemoryRoot ?? './mixgram'),
-    projectsRoot: path.resolve(base, config.projectsRoot),
-    sqlitePath: path.resolve(base, config.sqlitePath)
+    sqlitePath: path.isAbsolute(sqlite) ? sqlite : path.resolve(base, sqlite)
   };
 }
 

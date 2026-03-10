@@ -114,10 +114,9 @@ Example **`.mixgram/config.json`** (project or home):
 
 ```json
 {
-  "homeMemoryRoot": "./home/memory",
+  "homeMemoryRoot": "~/.mixgram/docs",
   "projectMemoryRoot": "./mixgram",
-  "sqlitePath": "./.mixgram/index.db",
-  "watch": false,
+  "sqlitePath": "~/.mixgram/index.db",
   "embeddings": {
     "enabled": true
   }
@@ -128,10 +127,10 @@ Paths in the config file are relative to the config file’s directory (project)
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `homeMemoryRoot` | `./home/memory` | Cross-project memory (Markdown files). |
+| `homeMemoryRoot` | `~/.mixgram/docs` | Cross-project memory (Markdown files). |
 | `projectMemoryRoot` | `./mixgram` | Project memory in the current repo (e.g. `mixgram/architecture/`, `mixgram/decisions/`). You can use another folder name, e.g. `./specs` for `specs/architecture/`. |
-| `sqlitePath` | `./.mixgram/index.db` | SQLite index (FTS5 + optional vectors). |
-| `watch` | `false` | Watch files and reindex on change. |
+| `sqlitePath` | `~/.mixgram/index.db` | SQLite index (FTS5 + optional vectors). |
+| `watch` | `true` | Watch files and reindex on change. |
 | `indexing.reindexOnStartup` | `true` | Full reindex when server starts. |
 | `embeddings.enabled` | `false` | Enable async local embeddings and hybrid search. |
 | `search.defaultScopeMode` | `'merged'` | `'project-only'` \| `'home-only'` \| `'merged'`. |
