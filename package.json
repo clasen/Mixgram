@@ -1,6 +1,6 @@
 {
   "name": "mixgram",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "MCP memory server with Markdown source of truth and SQLite FTS5.",
   "keywords": [
     "mcp",
@@ -41,7 +41,7 @@
     "better-sqlite3": "^12.6.2",
     "chokidar": "^4.0.1",
     "gray-matter": "^4.0.3",
-    "glob": "^10.4.5",
+    "glob": "^13.0.0",
     "remark-parse": "^11.0.0",
     "sqlite-vec": "^0.1.6",
     "unified": "^11.0.5",
