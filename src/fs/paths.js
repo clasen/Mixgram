@@ -32,10 +32,38 @@ function slugFromTopicKey(topicKey) {
     .replace(/^-|-$/g, '') || 'note';
 }
 
+function filenameSlugFromTopicKey(topicKey, { project = null, type = null } = {}) {
+  if (!topicKey || typeof topicKey !== 'string') return 'note';
+
+  const segments = topicKey
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments.length === 0) return 'note';
+
+  const normalizedProject = slugFromTopicKey(project);
+  if (normalizedProject !== 'note' && slugFromTopicKey(segments[0]) === normalizedProject) {
+    segments.shift();
+  }
+
+  const typeDir = TYPE_TO_DIR[type] || 'generated';
+  const redundantPrefixes = new Set([
+    slugFromTopicKey(type),
+    slugFromTopicKey(typeDir)
+  ].filter((value) => value !== 'note'));
+
+  if (segments.length > 1 && redundantPrefixes.has(slugFromTopicKey(segments[0]))) {
+    segments.shift();
+  }
+
+  return slugFromTopicKey(segments.join('-'));
+}
+
 function documentPath(config, { scope, project, type, topic_key, id }) {
   const typeDir = TYPE_TO_DIR[type] || 'generated';
-  const slug = slugFromTopicKey(topic_key);
-  const baseName = `${type}--${slug}.md`;
+  const slug = filenameSlugFromTopicKey(topic_key, { project, type });
+  const baseName = `${slug}.md`;
 
   if (scope === 'home') {
     const root = config.homeMemoryRoot;
@@ -75,5 +103,6 @@ export {
   mixgramDir,
   ensureMixgramDir,
   TYPE_TO_DIR,
-  slugFromTopicKey
+  slugFromTopicKey,
+  filenameSlugFromTopicKey
 };

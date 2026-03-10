@@ -70,7 +70,8 @@ Add to Cursor’s MCP config (or run `mixgram setup cursor`):
   "mcpServers": {
     "mixgram": {
       "command": "mixgram",
-      "args": ["mcp"]
+      "args": ["mcp"],
+      "cwd": "${workspaceFolder}"
     }
   }
 }
@@ -81,11 +82,12 @@ With embeddings and custom paths via args:
 ```json
 "mixgram": {
   "command": "mixgram",
-  "args": ["mcp", "--embeddings", "--home", "/data/memory", "--project-memory", "./specs"]
+  "args": ["mcp", "--embeddings", "--home", "/data/memory", "--project-memory", "./specs"],
+  "cwd": "${workspaceFolder}"
 }
 ```
 
-Or use `./mixgram` (default), `./docs`, or any path. Or use a config file (see below) and just `"args": ["mcp"]`. Restart Cursor after changing config.
+Set `cwd` to `${workspaceFolder}` so relative project paths like `./mixgram` resolve inside the active repo instead of the parent process directory. Or use a config file (see below) and just `"args": ["mcp"]`. Restart Cursor after changing config.
 
 ---
 

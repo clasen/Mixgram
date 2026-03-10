@@ -4,6 +4,8 @@
  * ctx: { h, parse, config, fs, reporter, ok } where ok(cond, msg) counts and optionally prints check.
  */
 
+import path from 'path';
+
 import {
   decisionSqliteIndex,
   decisionSqliteIndexRevision2,
@@ -44,6 +46,7 @@ export const scenarios = [
       ok(s1.success && s1.id && s1.created === true, 'save success');
       ok(fs.existsSync(s1.path), 'file created');
       ok(s1.path.includes('mixgram') || s1.path.replace(/\\/g, '/').includes('mixgram'), 'project doc under mixgram');
+      ok(path.basename(s1.path) === 'architecture-sqlite-derived-index.md', 'project doc filename omits redundant prefixes');
 
       const search1 = await h.mem_search({ query: 'derived SQLite index', project: PROJECT_NAME });
       const search1Parsed = parseRes(search1);
@@ -74,6 +77,7 @@ export const scenarios = [
       const s2 = parseRes(save2);
       reporter.step('mem_save (home)', { scope: 'home', topic_key: patternIncrementalReindex.topic_key }, { path: s2.path, created: s2.created });
       ok(s2.success && s2.path && s2.path.includes('home'), 'home save');
+      ok(path.basename(s2.path) === 'incremental-reindexing.md', 'home doc filename omits folder category');
 
       const searchMerged = await h.mem_search({ query: 'reindex', scope_mode: 'merged', project: PROJECT_NAME });
       const mergedParsed = parseRes(searchMerged);

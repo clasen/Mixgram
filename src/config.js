@@ -10,8 +10,8 @@ function expandHome(p) {
 }
 
 const DEFAULT_CONFIG = {
-  homeMemoryRoot: '~/.mixgram/shared',
-  projectMemoryRoot: './mixgram',
+  homeMemoryRoot: '~/.mixgram/docs',
+  projectMemoryRoot: './docs',
   sqlitePath: '~/.mixgram/index.db',
   watch: true,
   indexing: {

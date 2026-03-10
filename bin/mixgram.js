@@ -100,6 +100,13 @@ const MIXGRAM_ENTRY = {
   args: ['mcp']
 };
 
+const CURSOR_MIXGRAM_ENTRY = {
+  ...MIXGRAM_ENTRY,
+  // Cursor interpolates this to the active workspace root, so project memory
+  // stays under <workspace>/mixgram instead of the parent process cwd.
+  cwd: '${workspaceFolder}'
+};
+
 function cursorMcpPath() {
   const home = os.homedir();
   if (process.platform === 'win32') {
@@ -139,7 +146,7 @@ function setupCursor() {
       process.exit(1);
     }
   }
-  data.mcpServers.mixgram = MIXGRAM_ENTRY;
+  data.mcpServers.mixgram = CURSOR_MIXGRAM_ENTRY;
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
   console.log('Cursor: added mixgram to', filePath);
   console.log('Restart Cursor to load the MCP server.');

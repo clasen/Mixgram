@@ -7,12 +7,17 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { spawnSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import { loadConfig } from '../src/config.js';
 import { createToolHandlers } from '../src/mcp/tools.js';
 import { getToolDefinitions } from '../src/mcp/tool-registry.js';
 import { closeDb, getDb } from '../src/db/sqlite.js';
 import { scenarios } from './scenarios/scenarios.js';
 import * as reporter from './reporter.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mixgram-test-'));
 const config = loadConfig({
@@ -46,6 +51,51 @@ const ctx = {
   reporter,
   shared: {}
 };
+
+function runCliSetupChecks() {
+  const cliTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mixgram-cli-test-'));
+  const repoRoot = path.dirname(__dirname);
+
+  if (reporter.VISUAL) {
+    reporter.startScenario('CLI setup cursor config', 'Verify Cursor setup writes workspace cwd for project-scoped memory.');
+  }
+
+  let p = 0;
+  let f = 0;
+  const ok = (cond, msg) => {
+    if (cond) p++;
+    else f++;
+    if (reporter.VISUAL) reporter.check(msg, cond);
+  };
+
+  try {
+    const result = spawnSync(process.execPath, [path.join(repoRoot, 'bin', 'mixgram.js'), 'setup', 'cursor'], {
+      cwd: repoRoot,
+      env: { ...process.env, HOME: cliTmpDir },
+      encoding: 'utf8'
+    });
+
+    ok(result.status === 0, 'setup cursor exits successfully');
+
+    const cursorConfigPath = path.join(cliTmpDir, '.cursor', 'mcp.json');
+    ok(fs.existsSync(cursorConfigPath), 'cursor mcp.json created');
+
+    const cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf8'));
+    const entry = cursorConfig?.mcpServers?.mixgram;
+    ok(entry?.command === 'mixgram', 'cursor entry command preserved');
+    ok(Array.isArray(entry?.args) && entry.args[0] === 'mcp', 'cursor entry args preserved');
+    ok(entry?.cwd === '${workspaceFolder}', 'cursor entry uses workspace cwd');
+  } catch (err) {
+    if (reporter.VISUAL) reporter.check('CLI setup cursor config threw', false, err.message);
+    f += 1;
+  } finally {
+    try { fs.rmSync(cliTmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  if (reporter.VISUAL) reporter.endScenario(p, f);
+  totalPassed += p;
+  totalFailed += f;
+}
 
 async function runScenarios() {
   for (const scenario of scenarios) {
@@ -141,6 +191,7 @@ async function runLegacySemanticKnn() {
 }
 
 async function run() {
+  runCliSetupChecks();
   await runScenarios();
   await runLegacySemanticKnn();
 
