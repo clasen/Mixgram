@@ -15,13 +15,22 @@ function getBm25Weights(config) {
   ];
 }
 
+// FTS5 uses "/" for NEAR (e.g. term/5) and "-" for NOT; dash-like chars between words break parsing.
+const FTS5_NEAR_SLASH = /\//g;
+const FTS5_NOT_HYPHEN = /(?<=\w)[-\u2010-\u2015\u2212](?=\w)/g; // hyphen, en/em-dash, minus
+
 /**
  * Normalize query for FTS5: same as indexed text (NFD, remove diacritics, lowercase).
+ * Replaces "/" with space so it is not interpreted as FTS5 NEAR syntax (e.g. term/5).
+ * Replaces "-" (and Unicode dashes) between word chars with space so "alchemy-tycoon" is not parsed as "alchemy" NOT "tycoon".
  * Leaves FTS5 operators (AND, OR, NOT, "phrase") intact.
  */
 function normalizeQuery(q) {
   if (q == null || typeof q !== 'string') return '';
-  return normalizeForFts(q.trim());
+  const trimmed = q.trim();
+  const slashSafe = trimmed.replace(FTS5_NEAR_SLASH, ' ');
+  const hyphenSafe = slashSafe.replace(FTS5_NOT_HYPHEN, ' ');
+  return normalizeForFts(hyphenSafe);
 }
 
 /**

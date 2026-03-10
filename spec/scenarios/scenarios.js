@@ -169,6 +169,36 @@ export const scenarios = [
     }
   },
   {
+    name: 'Search with hyphen and slash in query (FTS5 sanitization)',
+    goal: 'mem_search does not throw on queries containing "-" or "/" (no "syntax error near /" or "no such column").',
+    run: async function (ctx) {
+      const { h, reporter } = ctx;
+      const parseRes = ctx.parse || parse;
+      let p = 0, f = 0;
+      const ok = (cond, msg) => { if (cond) p++; else f++; reporter.check(msg, cond); };
+
+      reporter.startScenario(this.name, this.goal);
+
+      const queries = ['sdd-init', 'sdd-init/alchemy-tycoon', 'alchemy-tycoon sdd-init'];
+      for (const query of queries) {
+        let res;
+        try {
+          res = await h.mem_search({ query, project: PROJECT_NAME, limit: 5 });
+        } catch (e) {
+          reporter.check(`mem_search("${query}") does not throw`, false);
+          f++;
+          reporter.endScenario(p, f);
+          return { passed: p, failed: f };
+        }
+        const data = parseRes(res).results;
+        ok(Array.isArray(data), `mem_search("${query}") returns array`);
+      }
+
+      reporter.endScenario(p, f);
+      return { passed: p, failed: f };
+    }
+  },
+  {
     name: 'Context for project',
     goal: 'mem_context returns usable context (recent or query-based).',
     run: async function (ctx) {

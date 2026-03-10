@@ -7,6 +7,7 @@
  */
 import { run } from '../src/mcp/server.js';
 import { loadConfig } from '../src/config.js';
+import { closeDb } from '../src/db/sqlite.js';
 import { createToolHandlers } from '../src/mcp/tools.js';
 import { getToolByName, listToolNames, parseToolArgs, formatToolHelp } from '../src/mcp/cli-adapter.js';
 import fs from 'fs';
@@ -217,6 +218,7 @@ Usage: mixgram <command> [options]
 Commands:
   mcp [options]        Run the MCP server (stdio). Use this in your client config.
   setup <client>       Register Mixgram with an MCP client.
+  flushdb              Delete the SQLite database file (and WAL/shm).
   help [tool]          Show help; with optional tool name, show options for that tool.
   -v, --version        Print version from package and exit.
   <tool> [options]     Run an MCP tool by name. Tools:
@@ -260,6 +262,26 @@ async function main() {
         console.error(err);
         process.exit(1);
       });
+    return;
+  }
+
+  if (SUBCOMMAND === 'flushdb') {
+    const { overrides, baseDir, projectBaseDir } = loadCliConfig();
+    const config = loadConfig(overrides, baseDir, projectBaseDir);
+    const dbPath = config.sqlitePath;
+    closeDb();
+    const removed = [];
+    for (const p of [dbPath, dbPath + '-wal', dbPath + '-shm']) {
+      if (fs.existsSync(p)) {
+        fs.unlinkSync(p);
+        removed.push(p);
+      }
+    }
+    if (removed.length) {
+      console.log('Removed:', removed.join(', '));
+    } else {
+      console.log('No database file at', dbPath);
+    }
     return;
   }
 
