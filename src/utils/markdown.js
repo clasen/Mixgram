@@ -6,8 +6,8 @@ export const FRONTMATTER_KEYS = [
   'embedding_status', 'indexed_at', 'deleted_at'
 ];
 
-/** Keys written to .md frontmatter (needed for re-index, scope/project filtering, timeline). */
-const DISPLAY_FRONTMATTER_KEYS = ['id', 'type', 'title', 'scope', 'project', 'topic_key', 'session_id', 'created'];
+/** Keys written to .md: id, type, title, created (cosmetic). scope/project stay in DB only; reindex infers scope from path. */
+const DISPLAY_FRONTMATTER_KEYS = ['id', 'type', 'title', 'created'];
 
 function formatCreated(createdAt) {
   if (!createdAt) return null;
@@ -39,12 +39,13 @@ function serializeFrontmatter(fm) {
   return obj;
 }
 
-/** Minimal frontmatter for .md (id required for re-index; created in friendly format). */
+/** Minimal frontmatter for .md (cosmetic only; deleted flag for soft-delete visibility). */
 function serializeDisplayFrontmatter(fm) {
   const obj = {};
   for (const k of DISPLAY_FRONTMATTER_KEYS) {
     if (k === 'created') {
-      const v = fm.created_at != null ? formatCreated(fm.created_at) : (fm.created ?? null);
+      const raw = fm.created_at ?? (fm.created ? parseCreated(fm.created) : null);
+      const v = raw ? formatCreated(raw) : null;
       if (v) obj[k] = v;
     } else if (fm[k] !== undefined && fm[k] !== null && fm[k] !== '') {
       obj[k] = fm[k];

@@ -6,32 +6,65 @@ import { contentHash } from '../../utils/hash.js';
 import { indexDocument, removeDocumentFromIndex } from '../indexing/indexer.js';
 import { getDb } from '../../db/sqlite.js';
 
+/** Load document metadata from DB (canonical source). Returns null if not found or file missing. */
+function getDocumentMetaById(config, id) {
+  const db = getDb(config);
+  const row = db.prepare(
+    'SELECT id, path, title, type, scope, project, topic_key, session_id, tool_name, created_at, updated_at, revision_count, duplicate_count, deleted_at, embedding_status FROM documents WHERE id = ? AND deleted_at IS NULL'
+  ).get(id);
+  if (!row) return null;
+  if (!fs.existsSync(row.path)) return null;
+  const tagRows = db.prepare('SELECT tag FROM document_tags WHERE document_id = ?').all(id);
+  const tags = tagRows.map((r) => r.tag);
+  const raw = fs.readFileSync(row.path, 'utf8');
+  const { body } = parse(raw);
+  return { path: row.path, frontmatter: rowToFrontmatter(row, tags), body };
+}
+
+/** Load document metadata by topic_key + scope + project. */
+function getDocumentMetaByTopicKey(config, topic_key, scope, project) {
+  const db = getDb(config);
+  const row = db.prepare(
+    'SELECT id, path, title, type, scope, project, topic_key, session_id, tool_name, created_at, updated_at, revision_count, duplicate_count, deleted_at, embedding_status FROM documents WHERE topic_key = ? AND scope = ? AND (project = ? OR (project IS NULL AND ? IS NULL)) AND deleted_at IS NULL'
+  ).get(topic_key, scope, project ?? null, project ?? null);
+  if (!row) return null;
+  if (!fs.existsSync(row.path)) return null;
+  const tagRows = db.prepare('SELECT tag FROM document_tags WHERE document_id = ?').all(row.id);
+  const tags = tagRows.map((r) => r.tag);
+  const raw = fs.readFileSync(row.path, 'utf8');
+  const { body } = parse(raw);
+  return { path: row.path, frontmatter: rowToFrontmatter(row, tags), body };
+}
+
+function rowToFrontmatter(row, tags = []) {
+  return {
+    id: row.id,
+    title: row.title ?? '',
+    type: row.type ?? 'generated_note',
+    scope: row.scope ?? 'project',
+    project: row.project ?? null,
+    topic_key: row.topic_key ?? null,
+    session_id: row.session_id ?? null,
+    tool_name: row.tool_name ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    revision_count: row.revision_count ?? 1,
+    duplicate_count: row.duplicate_count ?? 0,
+    deleted: !!row.deleted_at,
+    tags: Array.isArray(tags) ? tags : [],
+    embedding_status: row.embedding_status ?? 'disabled',
+    deleted_at: row.deleted_at ?? null
+  };
+}
+
 /**
  * Resolve existing document by id (takes precedence) or by topic_key + scope + project.
+ * Metadata comes from SQLite; body from disk.
  * @returns {{ path: string, frontmatter: object, body: string } | null}
  */
 function resolveDocument(config, { id, topic_key, scope, project }) {
-  const db = getDb(config);
-  if (id) {
-    const row = db.prepare('SELECT path FROM documents WHERE id = ? AND deleted_at IS NULL').get(id);
-    if (!row) return null;
-    const fullPath = row.path;
-    if (!fs.existsSync(fullPath)) return null;
-    const raw = fs.readFileSync(fullPath, 'utf8');
-    const parsed = parse(raw);
-    return { path: fullPath, frontmatter: parsed.frontmatter, body: parsed.body };
-  }
-  if (topic_key != null && scope != null) {
-    const row = db.prepare(
-      'SELECT id, path FROM documents WHERE topic_key = ? AND scope = ? AND (project = ? OR (project IS NULL AND ? IS NULL)) AND deleted_at IS NULL'
-    ).get(topic_key, scope, project ?? null, project ?? null);
-    if (!row) return null;
-    const fullPath = row.path;
-    if (!fs.existsSync(fullPath)) return null;
-    const raw = fs.readFileSync(fullPath, 'utf8');
-    const parsed = parse(raw);
-    return { path: fullPath, frontmatter: parsed.frontmatter, body: parsed.body };
-  }
+  if (id) return getDocumentMetaById(config, id);
+  if (topic_key != null && scope != null) return getDocumentMetaByTopicKey(config, topic_key, scope, project);
   return null;
 }
 
@@ -112,7 +145,7 @@ function saveDocument(config, payload) {
   const raw = toMarkdown(frontmatter, body);
   fs.writeFileSync(docPath, raw, 'utf8');
   const stats = fs.statSync(docPath);
-  indexDocument(config, docPath, raw, stats.mtimeMs);
+  indexDocument(config, docPath, raw, stats.mtimeMs, { overrideFrontmatter: frontmatter });
   return {
     id: frontmatter.id,
     path: docPath,
@@ -135,7 +168,7 @@ function updateDocument(config, { id, title, content, tags }) {
   const raw = toMarkdown(frontmatter, body);
   fs.writeFileSync(resolved.path, raw, 'utf8');
   const stats = fs.statSync(resolved.path);
-  indexDocument(config, resolved.path, raw, stats.mtimeMs);
+  indexDocument(config, resolved.path, raw, stats.mtimeMs, { overrideFrontmatter: frontmatter });
   return { id: frontmatter.id };
 }
 

@@ -3,6 +3,44 @@ import fs from 'fs';
 import { globSync } from 'glob';
 import { getDb } from '../../db/sqlite.js';
 import { indexDocument, removeDocumentFromIndex } from './indexer.js';
+import { TYPE_TO_DIR } from '../../fs/paths.js';
+
+/**
+ * Load document metadata from DB by path (for reindex/watcher).
+ * Returns frontmatter-like object or null.
+ */
+function getDocumentMetaByPath(config, filePath) {
+  const db = getDb(config);
+  const norm = path.normalize(filePath);
+  const row = db.prepare(
+    'SELECT id, path, title, type, scope, project, topic_key, session_id, tool_name, created_at, updated_at, revision_count, duplicate_count, deleted_at, embedding_status FROM documents WHERE path = ?'
+  ).get(norm);
+  if (!row) return null;
+  const tagRows = db.prepare('SELECT tag FROM document_tags WHERE document_id = ?').all(row.id);
+  const tags = tagRows.map((r) => r.tag);
+  return rowToFrontmatter(row, tags);
+}
+
+function rowToFrontmatter(row, tags = []) {
+  return {
+    id: row.id,
+    title: row.title ?? '',
+    type: row.type ?? 'generated_note',
+    scope: row.scope ?? 'project',
+    project: row.project ?? null,
+    topic_key: row.topic_key ?? null,
+    session_id: row.session_id ?? null,
+    tool_name: row.tool_name ?? null,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    revision_count: row.revision_count ?? 1,
+    duplicate_count: row.duplicate_count ?? 0,
+    deleted: !!row.deleted_at,
+    tags: Array.isArray(tags) ? tags : [],
+    embedding_status: row.embedding_status ?? 'disabled',
+    deleted_at: row.deleted_at ?? null
+  };
+}
 
 /**
  * List all Markdown file paths under home (cross-project) and project memory root (repo-local).
@@ -49,7 +87,8 @@ function fullReindex(config) {
     try {
       const raw = fs.readFileSync(filePath, 'utf8');
       const stat = fs.statSync(filePath);
-      indexDocument(config, filePath, raw, stat.mtimeMs);
+      const fileCreatedAt = stat.birthtime && !Number.isNaN(stat.birthtime.getTime()) ? stat.birthtime.toISOString() : undefined;
+      indexDocument(config, filePath, raw, stat.mtimeMs, { fileCreatedAt });
       indexed++;
     } catch (err) {
       // skip invalid or unreadable files
@@ -81,7 +120,9 @@ function incrementalReindex(config) {
         continue;
       }
       const raw = fs.readFileSync(filePath, 'utf8');
-      indexDocument(config, filePath, raw, stat.mtimeMs);
+      const dbMeta = getDocumentMetaByPath(config, filePath);
+      const fileCreatedAt = stat.birthtime && !Number.isNaN(stat.birthtime.getTime()) ? stat.birthtime.toISOString() : undefined;
+      indexDocument(config, filePath, raw, stat.mtimeMs, { overrideFrontmatter: dbMeta ?? undefined, fileCreatedAt });
       indexed++;
     } catch (_) {}
   }
@@ -107,4 +148,4 @@ function getDocumentIdByPath(config, filePath) {
   return row?.id ?? null;
 }
 
-export { listMarkdownPaths, clearIndex, fullReindex, incrementalReindex, getDocumentIdByPath };
+export { listMarkdownPaths, clearIndex, fullReindex, incrementalReindex, getDocumentIdByPath, getDocumentMetaByPath };

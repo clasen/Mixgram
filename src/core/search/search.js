@@ -70,8 +70,13 @@ function search(config, options = {}) {
     scopeCondition = ' AND d.scope = ? AND d.deleted_at IS NULL';
     params.push('home');
   } else {
-    scopeCondition = ' AND d.deleted_at IS NULL AND (d.scope = ? OR (d.scope = ? AND d.project = ?))';
-    params.push('home', 'project', project || '');
+    if (project) {
+      scopeCondition = ' AND d.deleted_at IS NULL AND (d.scope = ? OR (d.scope = ? AND d.project = ?))';
+      params.push('home', 'project', project);
+    } else {
+      scopeCondition = ' AND d.deleted_at IS NULL AND (d.scope = ? OR d.scope = ?)';
+      params.push('home', 'project');
+    }
   }
 
   params.push(project || '');

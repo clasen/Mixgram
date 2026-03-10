@@ -2,11 +2,11 @@ import path from 'path';
 import chokidar from 'chokidar';
 import fs from 'fs';
 import { indexDocument, removeDocumentFromIndex } from '../core/indexing/indexer.js';
-import { getDocumentIdByPath } from '../core/indexing/reindex.js';
+import { getDocumentIdByPath, getDocumentMetaByPath } from '../core/indexing/reindex.js';
 
 /**
  * Start watching home (cross-project) and project memory root (repo-local) for .md changes.
- * On add/change: index the file. On unlink: remove from index by path.
+ * On add/change: index the file (using DB metadata when path already known). On unlink: remove from index by path.
  * @param {object} config - resolved config
  * @returns {import('chokidar').FSWatcher} watcher instance (call .close() to stop)
  */
@@ -28,14 +28,18 @@ function startWatcher(config) {
       try {
         const raw = fs.readFileSync(filePath, 'utf8');
         const stat = fs.statSync(filePath);
-        indexDocument(config, filePath, raw, stat.mtimeMs);
+        const dbMeta = getDocumentMetaByPath(config, filePath);
+        const fileCreatedAt = stat.birthtime && !Number.isNaN(stat.birthtime.getTime()) ? stat.birthtime.toISOString() : undefined;
+        indexDocument(config, filePath, raw, stat.mtimeMs, { overrideFrontmatter: dbMeta ?? undefined, fileCreatedAt });
       } catch (_) {}
     })
     .on('change', (filePath) => {
       try {
         const raw = fs.readFileSync(filePath, 'utf8');
         const stat = fs.statSync(filePath);
-        indexDocument(config, filePath, raw, stat.mtimeMs);
+        const dbMeta = getDocumentMetaByPath(config, filePath);
+        const fileCreatedAt = stat.birthtime && !Number.isNaN(stat.birthtime.getTime()) ? stat.birthtime.toISOString() : undefined;
+        indexDocument(config, filePath, raw, stat.mtimeMs, { overrideFrontmatter: dbMeta ?? undefined, fileCreatedAt });
       } catch (_) {}
     })
     .on('unlink', (filePath) => {

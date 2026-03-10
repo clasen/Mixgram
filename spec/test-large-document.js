@@ -58,7 +58,7 @@ export function runLargeDocumentTest(config) {
   const size = raw.length;
   ok(size >= TARGET_SIZE * 0.95, `documento ~100k (${size} chars)`);
 
-  indexDocument(config, docPath, raw, stat.mtimeMs);
+  indexDocument(config, docPath, raw, stat.mtimeMs, { overrideFrontmatter: frontmatter });
 
   const db = getDb(config);
   const doc = db.prepare('SELECT id, length(body) AS body_len FROM documents WHERE id = ?').get(id);

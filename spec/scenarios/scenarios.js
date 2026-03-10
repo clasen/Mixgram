@@ -362,7 +362,7 @@ export const scenarios = [
       await h.mem_reindex({ full: true });
       reporter.step('mem_reindex', { full: true }, {});
 
-      const searchA = await h.mem_search({ query: 'Manual edits', project: PROJECT_NAME });
+      const searchA = await h.mem_search({ query: 'Manual edits' });
       const searchAParsed = parseRes(searchA);
       reporter.step('mem_search (after edit)', { query: 'Manual edits' }, searchAParsed, { highlight: ['title', 'snippet'] });
       ok(searchAParsed.results.length >= 1, 'edited phrase searchable');
@@ -392,8 +392,46 @@ export const scenarios = [
       reporter.step('fullReindex', {}, reindexResult);
       ok(reindexResult.indexed >= 1, 'full reindex indexed');
 
-      const searchAfter = await h.mem_search({ query: 'Manual edits', project: PROJECT_NAME });
+      const searchAfter = await h.mem_search({ query: 'Manual edits' });
       ok(parseRes(searchAfter).results.length >= 1, 'searchable after rebuild');
+
+      reporter.endScenario(p, f);
+      return { passed: p, failed: f };
+    }
+  },
+  {
+    name: 'Move file and reindex (path is source of location)',
+    goal: 'Moving a .md file to another folder: incremental reindex desindexa old path and indexa new path; doc remains findable by id.',
+    run: async function (ctx) {
+      const { h, reporter, config, fs } = ctx;
+      const parseRes = ctx.parse || parse;
+      let p = 0, f = 0;
+      const ok = (cond, msg) => { if (cond) p++; else f++; reporter.check(msg, cond); };
+      if (!ctx.shared?.decisionDoc) throw new Error('Requires decisionDoc');
+
+      reporter.startScenario(this.name, this.goal);
+
+      const docId = ctx.shared.decisionDoc.id;
+      const oldPath = ctx.shared.decisionDoc.path;
+      if (!fs.existsSync(oldPath)) throw new Error('decisionDoc path missing');
+      const raw = fs.readFileSync(oldPath, 'utf8');
+      const rootDir = path.dirname(path.dirname(oldPath));
+      const architectureDir = path.join(rootDir, 'architecture');
+      if (!fs.existsSync(architectureDir)) fs.mkdirSync(architectureDir, { recursive: true });
+      const newPath = path.join(architectureDir, path.basename(oldPath));
+      fs.writeFileSync(newPath, raw);
+      fs.unlinkSync(oldPath);
+      reporter.step('Move file', { from: oldPath, to: newPath }, {});
+
+      const reindexRes = await h.mem_reindex({ full: false });
+      const reindexParsed = parseRes(reindexRes);
+      reporter.step('mem_reindex', { full: false }, reindexParsed);
+      ok(reindexParsed.indexed >= 1 || reindexParsed.removed >= 1, 'reindex touched index');
+
+      const obsRes = await h.mem_get_observation({ id: docId });
+      const obs = parseRes(obsRes);
+      ok(!obs.error && obs.id === docId, 'get_observation by id still works after move');
+      ok(obs.title != null || (obs.content && obs.content.length > 0), 'observation has title or content');
 
       reporter.endScenario(p, f);
       return { passed: p, failed: f };
@@ -433,7 +471,7 @@ export const scenarios = [
 
       reporter.startScenario(this.name, this.goal);
 
-      const homeSearch = await h.mem_search({ query: 'reindex', scope_mode: 'merged', project: PROJECT_NAME });
+      const homeSearch = await h.mem_search({ query: 'reindex', scope_mode: 'merged' });
       const homeResults = parseRes(homeSearch).results;
       reporter.step('mem_search (merged)', { query: 'reindex', scope_mode: 'merged' }, { results: homeResults }, { highlight: ['scope', 'title', 'snippet'] });
       const homeInResults = homeResults.some((r) => r.scope === 'home');
