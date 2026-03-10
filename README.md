@@ -220,9 +220,9 @@ Omit `query` or use `*` to get **recent** context only.
 ### Example: one round-trip
 
 ```text
-1. mem_save → { success: true, id: "obs_...", path: "...", created: true }
+1. mem_save → { success: true, id: "<10-char id>", path: "...", created: true }
 2. mem_search({ query: "SQLite", project: "my-app" }) → { results: [ { title, snippet, ... } ] }
-3. mem_get_observation({ id: "obs_..." }) → { title, content, type, scope, project, ... }
+3. mem_get_observation({ id: "<10-char id>" }) → { title, content, type, scope, project, ... }
 ```
 
 ---

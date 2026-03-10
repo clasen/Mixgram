@@ -240,8 +240,8 @@ Setup targets:
   gemini-cli           Gemini CLI
   codex                Codex
 
-Example (Cursor): "mixgram": { "command": "mixgram", "args": ["mcp", "--project-memory", "${workspaceFolder}/docs"] }
-With embeddings:   "args": ["mcp", "--project-memory", "${workspaceFolder}/docs", "--embeddings"]
+Example (Cursor): "mixgram": { "command": "mixgram", "args": ["mcp", "--project-memory", "\${workspaceFolder}/docs"] }
+With embeddings:   "args": ["mcp", "--project-memory", "\${workspaceFolder}/docs", "--embeddings"]
 Config file:       .mixgram/config.json or ~/.mixgram/config.json
 
   npm install -g mixgram

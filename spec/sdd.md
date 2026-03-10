@@ -338,13 +338,13 @@ Each memory document should include structured frontmatter.
 
 ```md
 ---
-id: obs_01HXYZ123ABC
+id: a1b2c3d4e5
 title: Use SQLite as derived index
 type: decision
 scope: project
 project: castlebravo
 topic_key: architecture/sqlite-derived-index
-session_id: sess_01HXYZ456DEF
+session_id: f6g7h8i9j0
 tool_name: mem_save
 created_at: 2026-03-08T18:00:00Z
 updated_at: 2026-03-08T18:00:00Z

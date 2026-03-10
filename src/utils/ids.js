@@ -1,22 +1,27 @@
 import crypto from 'crypto';
 
-export function generateId(prefix = 'obs') {
-  const hex = crypto.randomBytes(12).toString('hex');
-  return `${prefix}_${hex}`;
+const ALPHANUM = '0123456789abcdefghijklmnopqrstuvwxyz';
+
+export function generateId() {
+  const bytes = crypto.randomBytes(10);
+  let s = '';
+  for (let i = 0; i < 10; i++) s += ALPHANUM[bytes[i] % 36];
+  return s;
 }
 
 export function observationId() {
-  return generateId('obs');
+  return generateId();
 }
 
 export function sessionId() {
-  return generateId('sess');
+  return generateId();
 }
 
 export function chunkId(documentId, index) {
-  return `${documentId}_chunk_${index}`;
+  return `${documentId}_${index}`;
 }
 
 export function promptId() {
-  return generateId('prompt');
+  return generateId();
 }
+

@@ -40,7 +40,7 @@ function normalizeQuery(q) {
  * @param {string} [options.scopeMode] - 'project-only' | 'home-only' | 'merged'
  * @param {string} [options.project] - project name (required for project-only and merged)
  * @param {number} [options.limit] - max results
- * @returns {Array<{ documentId: string, title: string, topicKey: string, type: string, scope: string, project: string | null, snippet: string, score: number }>}
+ * @returns {Array<{ documentId: string, title: string, topicKey: string, type: string, scope: string, project: string | null, created: string | null, snippet: string, score: number }>}
  */
 function search(config, options = {}) {
   const {
@@ -85,9 +85,10 @@ function search(config, options = {}) {
       d.type AS type,
       d.scope AS scope,
       d.project AS project,
+      d.created_at AS created,
       d.body AS body,
-      snippet(document_fts, 1, '<b>', '</b>', '...', 24) AS snippetTitle,
-      snippet(document_fts, 8, '<b>', '</b>', '...', 64) AS snippetBody,
+      snippet(document_fts, 1, '**', '**', '...', 24) AS snippetTitle,
+      snippet(document_fts, 8, '**', '**', '...', 64) AS snippetBody,
       bm25(document_fts, ${bm25Args}) AS rank
     FROM document_fts f
     JOIN documents d ON d.id = f.document_id
@@ -110,6 +111,7 @@ function search(config, options = {}) {
       type: r.type,
       scope: r.scope,
       project: r.project,
+      created: r.created || null,
       snippet: String(snippet).trim(),
       score: -Number(r.rank)
     };
@@ -123,7 +125,7 @@ function getRecentContext(config, options = {}) {
   const { project = null, limit = config.search?.defaultLimit ?? 10 } = options;
   const db = getDb(config);
   let sql = `
-    SELECT d.id AS documentId, d.title, d.topic_key AS topicKey, d.type, d.scope, d.project, d.body
+    SELECT d.id AS documentId, d.title, d.topic_key AS topicKey, d.type, d.scope, d.project, d.created_at AS created, d.body
     FROM documents d
     WHERE d.deleted_at IS NULL
   `;
@@ -145,6 +147,7 @@ function getRecentContext(config, options = {}) {
     type: r.type,
     scope: r.scope,
     project: r.project,
+    created: r.created || null,
     snippet: (r.body || '').slice(0, 300).trim()
   }));
 }

@@ -74,9 +74,9 @@ console.log('Mode: %s\n', RUN_EMBED_PROCESSING ? 'indexing + embedding queue pro
 
 // --- Create corpus ---
 for (let i = 0; i < NUM_SMALL; i++) {
-  writeDoc(baseConfig.projectMemoryRoot, `obs_small_${i}`, `Small ${i}`, `Content for small doc ${i}.\n`);
+  writeDoc(baseConfig.projectMemoryRoot, `bench${String(i).padStart(5, '0')}`, `Small ${i}`, `Content for small doc ${i}.\n`);
 }
-const largePath = writeDoc(baseConfig.projectMemoryRoot, 'obs_large', 'Large doc', buildLargeBody(LARGE_SIZE));
+const largePath = writeDoc(baseConfig.projectMemoryRoot, 'bench99999', 'Large doc', buildLargeBody(LARGE_SIZE));
 
 /**
  * Full reindex with breakdown: clearIndex, listMarkdownPaths, index loop.

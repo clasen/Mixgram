@@ -532,14 +532,14 @@ export const scenarios = [
 
       reporter.startScenario(this.name, this.goal);
 
-      const updBad = await h.mem_update({ id: 'obs_nonexistent123', title: 'No', content: 'No' });
+      const updBad = await h.mem_update({ id: 'nonexist01', title: 'No', content: 'No' });
       const updBadParsed = parseRes(updBad);
-      reporter.step('mem_update (bad id)', { id: 'obs_nonexistent123' }, updBadParsed);
+      reporter.step('mem_update (bad id)', { id: 'nonexist01' }, updBadParsed);
       ok(updBadParsed.success === false && updBadParsed.error, 'update fails cleanly');
 
-      const getBad = await h.mem_get_observation({ id: 'obs_nonexistent456' });
+      const getBad = await h.mem_get_observation({ id: 'nonexist02' });
       const getBadParsed = parseRes(getBad);
-      reporter.step('mem_get_observation (bad id)', { id: 'obs_nonexistent456' }, getBadParsed);
+      reporter.step('mem_get_observation (bad id)', { id: 'nonexist02' }, getBadParsed);
       ok(getBadParsed.error === 'Observation not found' || !!getBadParsed.error, 'get_observation error');
 
       reporter.endScenario(p, f);

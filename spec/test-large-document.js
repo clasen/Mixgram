@@ -39,7 +39,7 @@ export function runLargeDocumentTest(config) {
   fs.mkdirSync(docsDir, { recursive: true });
 
   const body = buildLargeBody(TARGET_SIZE);
-  const id = 'obs_large_100k';
+  const id = 'large100k00';
   const now = new Date().toISOString();
   const frontmatter = {
     id,
