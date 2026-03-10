@@ -1,12 +1,16 @@
 import { getDb } from '../../db/sqlite.js';
 import { normalizeForFts } from '../indexing/indexer.js';
+
 function getBm25Weights(config) {
   const w = config.indexing?.ftsWeights || {};
   return [
     w.title ?? 10,
-    w.topicKey ?? 8,
-    1, 1, 1,
-    w.heading ?? 5,
+    w.h1 ?? 8,
+    w.h2 ?? 6,
+    w.h3 ?? 5,
+    w.h4 ?? 4,
+    w.h5 ?? 3,
+    w.h6 ?? 2,
     w.body ?? 1
   ];
 }
@@ -17,7 +21,7 @@ function getBm25Weights(config) {
  */
 function normalizeQuery(q) {
   if (q == null || typeof q !== 'string') return '';
-  return q.trim();
+  return normalizeForFts(q.trim());
 }
 
 /**
@@ -27,7 +31,7 @@ function normalizeQuery(q) {
  * @param {string} [options.scopeMode] - 'project-only' | 'home-only' | 'merged'
  * @param {string} [options.project] - project name (required for project-only and merged)
  * @param {number} [options.limit] - max results
- * @returns {Array<{ documentId: string, chunkId: string, title: string, topicKey: string, type: string, scope: string, project: string | null, headingPath: string, snippet: string, score: number }>}
+ * @returns {Array<{ documentId: string, title: string, topicKey: string, type: string, scope: string, project: string | null, snippet: string, score: number }>}
  */
 function search(config, options = {}) {
   const {
@@ -57,33 +61,28 @@ function search(config, options = {}) {
     scopeCondition = ' AND d.scope = ? AND d.deleted_at IS NULL';
     params.push('home');
   } else {
-    // merged: project or home; when project given, prefer project
     scopeCondition = ' AND d.deleted_at IS NULL AND (d.scope = ? OR (d.scope = ? AND d.project = ?))';
     params.push('home', 'project', project || '');
   }
 
-  params.push(project || ''); // ORDER BY: project first in merged, else no match
-  const ftsLimit = config.embeddings?.enabled ? Math.max(limit * 3, 50) : limit;
-  params.push(ftsLimit);
+  params.push(project || '');
+  params.push(limit);
 
   const sql = `
     SELECT
-      f.chunk_id AS chunkId,
       f.document_id AS documentId,
       d.title AS title,
       d.topic_key AS topicKey,
       d.type AS type,
       d.scope AS scope,
       d.project AS project,
-      c.heading_path AS headingPath,
-      c.content AS content,
-      snippet(document_chunks_fts, 0, '<b>', '</b>', '...', 24) AS snippetTitle,
-      snippet(document_chunks_fts, 6, '<b>', '</b>', '...', 32) AS snippetBody,
-      bm25(document_chunks_fts, ${bm25Args}) AS rank
-    FROM document_chunks_fts f
+      d.body AS body,
+      snippet(document_fts, 1, '<b>', '</b>', '...', 24) AS snippetTitle,
+      snippet(document_fts, 8, '<b>', '</b>', '...', 64) AS snippetBody,
+      bm25(document_fts, ${bm25Args}) AS rank
+    FROM document_fts f
     JOIN documents d ON d.id = f.document_id
-    JOIN document_chunks c ON c.id = f.chunk_id
-    WHERE document_chunks_fts MATCH ? ${scopeCondition}
+    WHERE document_fts MATCH ? ${scopeCondition}
     ORDER BY (CASE WHEN d.scope = 'project' AND d.project = ? THEN 0 ELSE 1 END), rank
     LIMIT ?
   `;
@@ -91,97 +90,21 @@ function search(config, options = {}) {
   const stmt = db.prepare(sql);
   const rows = stmt.all(...params);
 
-  const mapped = rows.map((r) => {
-    const snippet = [r.snippetTitle, r.snippetBody].filter(Boolean).join(' … ') || r.content?.slice(0, 200) || '';
+  return rows.map((r) => {
+    const fromFts = [r.snippetTitle, r.snippetBody].filter((x) => x != null && x !== '').join(' … ');
+    const fallback = r.body != null ? String(r.body).slice(0, 200) : '';
+    const snippet = (fromFts && fromFts.trim()) || fallback || '';
     return {
       documentId: r.documentId,
-      chunkId: r.chunkId,
       title: r.title,
       topicKey: r.topicKey,
       type: r.type,
       scope: r.scope,
       project: r.project,
-      headingPath: r.headingPath,
-      snippet: snippet.trim(),
-      score: -Number(r.rank), // bm25 returns negative (lower = better), we expose positive
-      _rank: r.rank
+      snippet: String(snippet).trim(),
+      score: -Number(r.rank)
     };
   });
-
-  if (!config.embeddings?.enabled || mapped.length === 0) {
-    return mapped.slice(0, limit).map(({ _rank, ...r }) => r);
-  }
-
-  return hybridSearch(config, { query, scopeMode, project, limit, ftsRows: mapped });
-}
-
-async function hybridSearch(config, { query, scopeMode, project, limit, ftsRows }) {
-  const ftsWeight = config.search?.ftsWeight ?? 0.7;
-  const semanticWeight = config.search?.semanticWeight ?? 0.3;
-  let embedder;
-  let vectorStore;
-  try {
-    const [{ getEmbedder }, { getVectorStore }] = await Promise.all([
-      import('../embeddings/embedder.js'),
-      import('../embeddings/vectorStore.js')
-    ]);
-    embedder = await getEmbedder(config);
-    vectorStore = await getVectorStore(config);
-  } catch {
-    return ftsRows.slice(0, limit).map(({ _rank, ...r }) => r);
-  }
-  if (!embedder || !vectorStore) {
-    return ftsRows.slice(0, limit).map(({ _rank, ...r }) => r);
-  }
-  let semanticHits;
-  try {
-    const queryEmbedding = await embedder.embed(query);
-    semanticHits = await vectorStore.search(config, queryEmbedding, Math.max(limit * 2, 30));
-  } catch {
-    return ftsRows.slice(0, limit).map(({ _rank, ...r }) => r);
-  }
-  const byChunk = new Map(ftsRows.map((r) => [r.chunkId, { ...r }]));
-  const ftsScores = ftsRows.map((r) => -Number(r._rank));
-  const minFts = Math.min(...ftsScores);
-  const maxFts = Math.max(...ftsScores);
-  const rangeFts = maxFts - minFts || 1;
-  for (const row of ftsRows) {
-    const normFts = (minFts === maxFts) ? 1 : ((-Number(row._rank)) - minFts) / rangeFts;
-    const sem = semanticHits.find((h) => h.chunk_id === row.chunkId);
-    const similarity = sem ? 1 - sem.distance : 0;
-    const combined = ftsWeight * normFts + semanticWeight * similarity;
-    byChunk.get(row.chunkId).score = combined;
-  }
-  for (const sem of semanticHits) {
-    if (!byChunk.has(sem.chunk_id)) {
-      const db = getDb(config);
-      const r = db.prepare(`
-        SELECT c.id AS chunkId, c.document_id AS documentId, d.title, d.topic_key AS topicKey, d.type, d.scope, d.project, c.heading_path AS headingPath, c.content
-        FROM document_chunks c
-        JOIN documents d ON d.id = c.document_id
-        WHERE c.id = ?
-      `).get(sem.chunk_id);
-      if (r) {
-        const similarity = 1 - sem.distance;
-        byChunk.set(sem.chunk_id, {
-          documentId: r.documentId,
-          chunkId: r.chunkId,
-          title: r.title,
-          topicKey: r.topicKey,
-          type: r.type,
-          scope: r.scope,
-          project: r.project,
-          headingPath: r.headingPath,
-          snippet: (r.content || '').slice(0, 200).trim(),
-          score: semanticWeight * similarity
-        });
-      }
-    }
-  }
-  return Array.from(byChunk.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(({ _rank, ...r }) => r);
 }
 
 /**
@@ -191,9 +114,8 @@ function getRecentContext(config, options = {}) {
   const { project = null, limit = config.search?.defaultLimit ?? 10 } = options;
   const db = getDb(config);
   let sql = `
-    SELECT c.id AS chunkId, d.id AS documentId, d.title, d.topic_key AS topicKey, d.type, d.scope, d.project, c.heading_path AS headingPath, c.content
-    FROM document_chunks c
-    JOIN documents d ON d.id = c.document_id
+    SELECT d.id AS documentId, d.title, d.topic_key AS topicKey, d.type, d.scope, d.project, d.body
+    FROM documents d
     WHERE d.deleted_at IS NULL
   `;
   const params = [];
@@ -209,14 +131,12 @@ function getRecentContext(config, options = {}) {
   const rows = db.prepare(sql).all(...params);
   return rows.map((r) => ({
     documentId: r.documentId,
-    chunkId: r.chunkId,
     title: r.title,
     topicKey: r.topicKey,
     type: r.type,
     scope: r.scope,
     project: r.project,
-    headingPath: r.headingPath,
-    snippet: (r.content || '').slice(0, 300).trim()
+    snippet: (r.body || '').slice(0, 300).trim()
   }));
 }
 

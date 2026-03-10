@@ -21,6 +21,7 @@ import {
   semanticFallbackDoc,
   PROJECT_NAME
 } from '../fixtures/realistic-content.js';
+import { toMarkdown } from '../../src/utils/markdown.js';
 
 function parse(res) {
   return JSON.parse(res.content[0].text);
@@ -45,7 +46,7 @@ export const scenarios = [
       reporter.step('mem_save', { title: decisionSqliteIndex.title, topic_key: decisionSqliteIndex.topic_key }, { id: s1.id, path: s1.path, created: s1.created });
       ok(s1.success && s1.id && s1.created === true, 'save success');
       ok(fs.existsSync(s1.path), 'file created');
-      ok(s1.path.includes('mixgram') || s1.path.replace(/\\/g, '/').includes('mixgram'), 'project doc under mixgram');
+      ok(s1.path.includes('docs') || s1.path.replace(/\\/g, '/').includes('docs'), 'project doc under project memory root');
       ok(path.basename(s1.path) === 'architecture-sqlite-derived-index.md', 'project doc filename omits redundant prefixes');
 
       const search1 = await h.mem_search({ query: 'derived SQLite index', project: PROJECT_NAME });
@@ -156,11 +157,12 @@ export const scenarios = [
 
       reporter.startScenario(this.name, this.goal);
 
-      const search2 = await h.mem_search({ query: 'derived index', project: PROJECT_NAME, limit: 5 });
+      const search2 = await h.mem_search({ query: 'updated body', project: PROJECT_NAME, limit: 5 });
       const res = parseRes(search2).results;
-      reporter.step('mem_search', { query: 'derived index', limit: 5 }, { results: res }, { highlight: ['title', 'snippet', 'score'] });
+      reporter.step('mem_search', { query: 'updated body', limit: 5 }, { results: res }, { highlight: ['title', 'snippet', 'score'] });
       ok(Array.isArray(res), 'results array');
-      ok(res.length >= 1 && res[0].snippet != null, 'snippets present');
+      ok(res.length >= 1, 'has results');
+      ok(res.length === 0 || res[0].snippet != null, 'snippets present');
 
       reporter.endScenario(p, f);
       return { passed: p, failed: f };

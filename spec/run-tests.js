@@ -14,6 +14,7 @@ import { createToolHandlers } from '../src/mcp/tools.js';
 import { getToolDefinitions } from '../src/mcp/tool-registry.js';
 import { closeDb, getDb } from '../src/db/sqlite.js';
 import { scenarios } from './scenarios/scenarios.js';
+import { runLargeDocumentTest } from './test-large-document.js';
 import * as reporter from './reporter.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,7 +23,7 @@ const __dirname = path.dirname(__filename);
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'mixgram-test-'));
 const config = loadConfig({
   homeMemoryRoot: path.join(tmpDir, 'home', 'memory'),
-  projectMemoryRoot: path.join(tmpDir, 'mixgram'),
+  projectMemoryRoot: path.join(tmpDir, 'docs'),
   sqlitePath: path.join(tmpDir, '.mixgram', 'index.db')
 });
 fs.mkdirSync(path.dirname(config.sqlitePath), { recursive: true });
@@ -57,7 +58,7 @@ function runCliSetupChecks() {
   const repoRoot = path.dirname(__dirname);
 
   if (reporter.VISUAL) {
-    reporter.startScenario('CLI setup cursor config', 'Verify Cursor setup writes workspace cwd for project-scoped memory.');
+    reporter.startScenario('CLI setup cursor config', 'Verify Cursor setup writes project-memory arg for project-scoped memory.');
   }
 
   let p = 0;
@@ -83,8 +84,8 @@ function runCliSetupChecks() {
     const cursorConfig = JSON.parse(fs.readFileSync(cursorConfigPath, 'utf8'));
     const entry = cursorConfig?.mcpServers?.mixgram;
     ok(entry?.command === 'mixgram', 'cursor entry command preserved');
-    ok(Array.isArray(entry?.args) && entry.args[0] === 'mcp', 'cursor entry args preserved');
-    ok(entry?.cwd === '${workspaceFolder}', 'cursor entry uses workspace cwd');
+    const hasProjectMemory = Array.isArray(entry?.args) && entry.args.includes('--project-memory') && entry.args.includes('${workspaceFolder}/docs');
+    ok(hasProjectMemory, 'cursor entry uses --project-memory ${workspaceFolder}/docs');
   } catch (err) {
     if (reporter.VISUAL) reporter.check('CLI setup cursor config threw', false, err.message);
     f += 1;
@@ -167,15 +168,15 @@ async function runLegacySemanticKnn() {
   const persistId = parse(savePersist).id;
   ok(!!persistId, 'saved persistence doc');
   const db = getDb(configSemantic);
-  const chunkRow = db.prepare('SELECT id, document_id, content_hash, content FROM document_chunks WHERE document_id = ? LIMIT 1').get(persistId);
-  ok(!!chunkRow, 'chunk exists for persistence doc');
-  if (embedder && vectorStore && chunkRow) {
-    const embedding = await embedder.embed(chunkRow.content);
+  const docRow = db.prepare('SELECT id, body, content_hash FROM documents WHERE id = ?').get(persistId);
+  ok(!!docRow, 'document exists for persistence doc');
+  if (embedder && vectorStore && docRow?.body) {
+    const embedding = await embedder.embed(docRow.body);
     await vectorStore.ensureTables(configSemantic);
     await vectorStore.insert(configSemantic, {
-      chunk_id: chunkRow.id,
-      document_id: chunkRow.document_id,
-      content_hash: chunkRow.content_hash,
+      chunk_id: docRow.id,
+      document_id: docRow.id,
+      content_hash: docRow.content_hash,
       embedding
     });
     const queryEmb = await embedder.embed('dónde se persisten los datos');
@@ -194,6 +195,10 @@ async function run() {
   runCliSetupChecks();
   await runScenarios();
   await runLegacySemanticKnn();
+
+  const largeResult = runLargeDocumentTest(config);
+  totalPassed += largeResult.passed;
+  totalFailed += largeResult.failed;
 
   closeDb();
   try { fs.rmSync(tmpDir, { recursive: true }); } catch (_) {}

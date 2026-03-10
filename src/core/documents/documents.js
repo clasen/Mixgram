@@ -157,9 +157,9 @@ function deleteDocument(config, documentId, options = {}) {
     fs.writeFileSync(resolved.path, raw, 'utf8');
     const db = getDb(config);
     db.prepare('UPDATE documents SET deleted_at = ? WHERE id = ?').run(now, documentId);
-    const ftsRowids = db.prepare('SELECT rowid FROM document_chunks_fts WHERE document_id = ?').all(documentId);
+    const ftsRowids = db.prepare('SELECT rowid FROM document_fts WHERE document_id = ?').all(documentId);
     for (const { rowid } of ftsRowids) {
-      db.prepare('DELETE FROM document_chunks_fts WHERE rowid = ?').run(rowid);
+      db.prepare('DELETE FROM document_fts WHERE rowid = ?').run(rowid);
     }
   }
   return true;

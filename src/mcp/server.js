@@ -1,8 +1,48 @@
+import { fork } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { randomUUID } from 'crypto';
+import { fileURLToPath } from 'url';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { loadConfig } from '../config.js';
 import { createToolHandlers } from './tools.js';
 import { getToolDefinitions } from './tool-registry.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+let embeddingWorkerChild = null;
+let embeddingWorkerConfigPath = null;
+
+const EMBED_TIMEOUT_MS = 60000;
+
+function makeQueryEmbedder(child) {
+  return function getQueryEmbedding(text) {
+    if (!child?.connected) return Promise.resolve(null);
+    const id = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('embedding timeout'));
+      }, EMBED_TIMEOUT_MS);
+      const onMessage = (msg) => {
+        if (msg?.type !== 'embedResult' || msg.id !== id) return;
+        cleanup();
+        if (msg.err) {
+          reject(new Error(msg.err));
+          return;
+        }
+        resolve(msg.vector ? new Float32Array(msg.vector) : null);
+      };
+      const cleanup = () => {
+        clearTimeout(timeout);
+        child.off('message', onMessage);
+      };
+      child.on('message', onMessage);
+      child.send({ type: 'embed', id, text });
+    });
+  };
+}
 
 function createServer(configOverrides = {}, baseDir = null, projectBaseDir = null) {
   const config = loadConfig(configOverrides, baseDir, projectBaseDir);
@@ -59,8 +99,33 @@ async function run(configOverrides = {}, baseDir = null, projectBaseDir = null) 
   }
   if (config.embeddings?.enabled) {
     try {
-      const { startWorker } = await import('../core/embeddings/worker.js');
-      startWorker(config);
+      embeddingWorkerConfigPath = path.join(
+        os.tmpdir(),
+        `mixgram-worker-config-${process.pid}-${Date.now()}.json`
+      );
+      fs.writeFileSync(embeddingWorkerConfigPath, JSON.stringify(config), 'utf8');
+      const workerPath = path.join(__dirname, '..', 'core', 'embeddings', 'worker-process.js');
+      embeddingWorkerChild = fork(workerPath, [], {
+        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+        env: { ...process.env, MIXGRAM_WORKER_CONFIG: embeddingWorkerConfigPath }
+      });
+      config.getQueryEmbedding = makeQueryEmbedder(embeddingWorkerChild);
+      embeddingWorkerChild.on('exit', (code, signal) => {
+        if (code !== 0 && code != null && process.stderr) {
+          process.stderr.write(`[mixgram] embeddings worker exited: code=${code} signal=${signal}\n`);
+        }
+        config.getQueryEmbedding = null;
+        if (embeddingWorkerConfigPath && fs.existsSync(embeddingWorkerConfigPath)) {
+          try { fs.unlinkSync(embeddingWorkerConfigPath); } catch (_) {}
+          embeddingWorkerConfigPath = null;
+        }
+      });
+      process.on('exit', () => {
+        if (embeddingWorkerChild) embeddingWorkerChild.kill();
+        if (embeddingWorkerConfigPath && fs.existsSync(embeddingWorkerConfigPath)) {
+          try { fs.unlinkSync(embeddingWorkerConfigPath); } catch (_) {}
+        }
+      });
     } catch (err) {
       if (typeof process !== 'undefined' && process.stderr) {
         process.stderr.write(`[mixgram] embeddings worker start failed: ${err?.message ?? err}\n`);

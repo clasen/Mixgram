@@ -1,78 +1,125 @@
 import { unified } from 'unified';
 import remarkParse from 'remark-parse';
 import { visit } from 'unist-util-visit';
-import { parse as parseFrontmatter } from '../../utils/markdown.js';
+import { parse as parseMarkdownWithFrontmatter } from '../../utils/markdown.js';
 
-function stringifyNode(node) {
-  if (node.value) return node.value;
-  if (node.children) return node.children.map(stringifyNode).join('');
+/**
+ * Recursively extract plain text from an mdast node (strips emphasis, links, etc.).
+ */
+function extractTextFromNode(node) {
+  if (!node) return '';
+  if (node.type === 'text' || node.type === 'inlineCode') {
+    return node.value || '';
+  }
+  if (node.children && Array.isArray(node.children)) {
+    return node.children.map((child) => extractTextFromNode(child)).join('');
+  }
   return '';
 }
 
-function extractSections(mdBody) {
-  const tree = unified().use(remarkParse).parse(mdBody);
-  const sections = [];
-  let currentHeading = null;
-  let currentDepth = 0;
-  let currentContent = [];
+/**
+ * Build mdast from raw markdown and extract title, h1–h6, body, structure, sectionsIndex.
+ * One parse, one tree walk; no chunking. Compatible with the remark-parse indexing model.
+ *
+ * @param {string} markdown - Full markdown body (no frontmatter)
+ * @param {{ includeCodeBlocks?: boolean }} options
+ * @returns {{ title: string, h1: string, h2: string, h3: string, h4: string, h5: string, h6: string, body: string, structure: object[], sectionsIndex: object }}
+ */
+export function extractMarkdownFields(markdown, { includeCodeBlocks = false } = {}) {
+  const tree = unified().use(remarkParse).parse(markdown);
 
-  const flush = () => {
-    const text = currentContent.join('\n').trim();
-    if (text) {
-      sections.push({ headingPath: currentHeading || '', headingLevel: currentDepth, content: text });
-    }
-  };
+  const h1 = [];
+  const h2 = [];
+  const h3 = [];
+  const h4 = [];
+  const h5 = [];
+  const h6 = [];
+  const bodyParts = [];
+  const structure = [];
+  const stack = [];
+  const sectionsIndex = {};
+  let currentSection = null;
+  let sectionIdCounter = 0;
+  let title = '';
 
   visit(tree, (node) => {
     if (node.type === 'heading') {
-      flush();
-      currentDepth = node.depth;
-      const title = stringifyNode(node);
-      currentHeading = currentHeading ? `${currentHeading} > ${title}` : title;
-      currentContent = [title ? `#${'#'.repeat(node.depth - 1)} ${title}` : ''];
+      const text = (node.children || []).map((child) => extractTextFromNode(child)).join('').trim();
+      const depth = node.depth;
+
+      switch (depth) {
+        case 1: h1.push(text); break;
+        case 2: h2.push(text); break;
+        case 3: h3.push(text); break;
+        case 4: h4.push(text); break;
+        case 5: h5.push(text); break;
+        case 6: h6.push(text); break;
+        default: break;
+      }
+      if (!title && depth === 1) title = text;
+
+      const section = {
+        id: `s${++sectionIdCounter}`,
+        depth,
+        heading: text,
+        parentId: null,
+        childrenIds: []
+      };
+
+      while (stack.length > 0 && stack[stack.length - 1].depth >= depth) {
+        stack.pop();
+      }
+      if (stack.length > 0) {
+        const parent = stack[stack.length - 1];
+        section.parentId = parent.id;
+        parent.childrenIds.push(section.id);
+      } else {
+        structure.push(section);
+      }
+      stack.push(section);
+      sectionsIndex[section.id] = section;
+      currentSection = section;
       return;
     }
-    if (node.type === 'paragraph' || node.type === 'code' || node.type === 'blockquote' || node.type === 'list') {
-      currentContent.push(stringifyNode(node));
+
+    if (node.type === 'paragraph') {
+      const text = (node.children || []).map((child) => extractTextFromNode(child)).join('').trim();
+      if (text) bodyParts.push(text);
+      return;
+    }
+
+    if (includeCodeBlocks && node.type === 'code') {
+      const text = node.value?.trim();
+      if (text) bodyParts.push(text);
     }
   });
 
-  flush();
+  const body = bodyParts.join('\n\n');
 
-  if (sections.length === 0 && mdBody.trim()) {
-    sections.push({ headingPath: '', headingLevel: 0, content: mdBody.trim() });
-  }
-  return sections;
+  return {
+    title: title || (h1[0] ?? ''),
+    h1: h1.join('\n'),
+    h2: h2.join('\n'),
+    h3: h3.join('\n'),
+    h4: h4.join('\n'),
+    h5: h5.join('\n'),
+    h6: h6.join('\n'),
+    body,
+    structure,
+    sectionsIndex
+  };
 }
 
-function chunkSections(sections, chunkSize = 1200, chunkOverlap = 120) {
-  const chunks = [];
-  for (const sec of sections) {
-    const { headingPath, headingLevel, content } = sec;
-    if (content.length <= chunkSize) {
-      chunks.push({ headingPath, headingLevel, content });
-      continue;
-    }
-    let start = 0;
-    while (start < content.length) {
-      let end = Math.min(start + chunkSize, content.length);
-      if (end < content.length) {
-        const lastSpace = content.lastIndexOf(' ', end);
-        if (lastSpace > start) end = lastSpace;
-      }
-      chunks.push({ headingPath, headingLevel, content: content.slice(start, end).trim() });
-      start = end - (end - start < content.length ? chunkOverlap : 0);
-    }
-  }
-  return chunks;
+/**
+ * Parse raw content: frontmatter (gray-matter) + AST-based extraction of body fields.
+ * Returns one object per document (no chunking).
+ *
+ * @param {string} rawContent - Full file content including optional frontmatter
+ * @param {{ includeCodeBlocks?: boolean }} options
+ */
+export function parseMarkdown(rawContent, options = {}) {
+  const { frontmatter, body: rawBody } = parseMarkdownWithFrontmatter(rawContent);
+  const fields = extractMarkdownFields(rawBody, options);
+  const body = (fields.body && fields.body.trim()) ? fields.body : (rawBody || '').trim();
+  return { frontmatter, ...fields, body };
 }
-
-function parseAndChunk(rawContent, options = {}) {
-  const { chunkSize = 1200, chunkOverlap = 120 } = options;
-  const { frontmatter, body } = parseFrontmatter(rawContent);
-  const sections = extractSections(body);
-  const chunks = chunkSections(sections, chunkSize, chunkOverlap);
-  return { frontmatter, body, chunks };
-}
-
-export { extractSections, chunkSections, parseAndChunk };

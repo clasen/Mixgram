@@ -43,8 +43,7 @@ async function ensureTables(config) {
       document_id TEXT NOT NULL,
       content_hash TEXT NOT NULL,
       embedding_model TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      FOREIGN KEY(chunk_id) REFERENCES document_chunks(id)
+      created_at TEXT NOT NULL
     )
   `);
   db.exec(`

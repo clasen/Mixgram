@@ -1,7 +1,6 @@
 import { getDb } from '../../db/sqlite.js';
-import { parseAndChunk } from './parser.js';
+import { parseMarkdown } from './parser.js';
 import { contentHash } from '../../utils/hash.js';
-import { chunkId } from '../../utils/ids.js';
 
 function normalizeForFts(str) {
   if (str == null || str === undefined) return '';
@@ -14,21 +13,26 @@ function normalizeForFts(str) {
 
 function indexDocument(config, docPath, rawContent, fileMtimeMs = null) {
   const db = getDb(config);
-  const { frontmatter, chunks } = parseAndChunk(rawContent, {
-    chunkSize: config.indexing.chunkSize,
-    chunkOverlap: config.indexing.chunkOverlap
-  });
+  const includeCodeBlocks = config.indexing?.includeCodeBlocks ?? false;
+  const parsed = parseMarkdown(rawContent, { includeCodeBlocks });
 
+  const { frontmatter, title, h1, h2, h3, h4, h5, h6, body, structure, sectionsIndex } = parsed;
   const id = frontmatter.id;
   if (!id) throw new Error('Document frontmatter must include id');
 
   const now = new Date().toISOString();
   const docHash = contentHash(rawContent);
+  const docTitle = frontmatter.title || title || '';
+
+  const existing = db.prepare('SELECT content_hash, file_mtime_ms FROM documents WHERE id = ?').get(id);
+  if (existing && existing.content_hash === docHash && (fileMtimeMs == null || existing.file_mtime_ms === fileMtimeMs)) {
+    return { id };
+  }
 
   const docRow = {
     id,
     path: docPath,
-    title: frontmatter.title || '',
+    title: docTitle,
     type: frontmatter.type || 'generated_note',
     scope: frontmatter.scope || 'project',
     project: frontmatter.project || null,
@@ -43,49 +47,42 @@ function indexDocument(config, docPath, rawContent, fileMtimeMs = null) {
     deleted_at: frontmatter.deleted_at || null,
     revision_count: frontmatter.revision_count ?? 1,
     duplicate_count: frontmatter.duplicate_count ?? 0,
-    embedding_status: frontmatter.embedding_status || 'disabled'
+    embedding_status: frontmatter.embedding_status || 'disabled',
+    body: body || '',
+    structure: JSON.stringify(structure),
+    sections_index: JSON.stringify(sectionsIndex)
   };
 
-  let oldChunkIds = [];
+  let wasExisting = false;
   db.transaction(() => {
-    const existing = db.prepare('SELECT id FROM documents WHERE id = ?').get(id);
-    if (existing) {
-      oldChunkIds = db.prepare('SELECT id FROM document_chunks WHERE document_id = ?').all(id).map((r) => r.id);
-      const ftsRowids = db.prepare('SELECT rowid FROM document_chunks_fts WHERE document_id = ?').all(id);
+    const existingDoc = db.prepare('SELECT id FROM documents WHERE id = ?').get(id);
+    if (existingDoc) {
+      wasExisting = true;
+      const ftsRowids = db.prepare('SELECT rowid FROM document_fts WHERE document_id = ?').all(id);
       for (const { rowid } of ftsRowids) {
-        db.prepare('DELETE FROM document_chunks_fts WHERE rowid = ?').run(rowid);
+        db.prepare('DELETE FROM document_fts WHERE rowid = ?').run(rowid);
       }
-      db.prepare('DELETE FROM document_chunks WHERE document_id = ?').run(id);
       db.prepare('DELETE FROM document_tags WHERE document_id = ?').run(id);
     }
 
     db.prepare(`
-      INSERT OR REPLACE INTO documents (id, path, title, type, scope, project, topic_key, session_id, tool_name, content_hash, file_mtime_ms, created_at, updated_at, indexed_at, deleted_at, revision_count, duplicate_count, embedding_status)
-      VALUES (@id, @path, @title, @type, @scope, @project, @topic_key, @session_id, @tool_name, @content_hash, @file_mtime_ms, @created_at, @updated_at, @indexed_at, @deleted_at, @revision_count, @duplicate_count, @embedding_status)
+      INSERT OR REPLACE INTO documents (id, path, title, type, scope, project, topic_key, session_id, tool_name, content_hash, file_mtime_ms, created_at, updated_at, indexed_at, deleted_at, revision_count, duplicate_count, embedding_status, body, structure, sections_index)
+      VALUES (@id, @path, @title, @type, @scope, @project, @topic_key, @session_id, @tool_name, @content_hash, @file_mtime_ms, @created_at, @updated_at, @indexed_at, @deleted_at, @revision_count, @duplicate_count, @embedding_status, @body, @structure, @sections_index)
     `).run(docRow);
 
-    const titleNorm = normalizeForFts(docRow.title);
-    const topicKeyNorm = normalizeForFts(docRow.topic_key);
-    const typeNorm = normalizeForFts(docRow.type);
-    const scopeNorm = normalizeForFts(docRow.scope);
-    const projectNorm = normalizeForFts(docRow.project);
+    const titleNorm = normalizeForFts(docTitle);
+    const h1Norm = normalizeForFts(h1);
+    const h2Norm = normalizeForFts(h2);
+    const h3Norm = normalizeForFts(h3);
+    const h4Norm = normalizeForFts(h4);
+    const h5Norm = normalizeForFts(h5);
+    const h6Norm = normalizeForFts(h6);
+    const bodyNorm = normalizeForFts(body);
 
-    chunks.forEach((chunk, idx) => {
-      const cid = chunkId(id, idx);
-      const chunkHash = contentHash(chunk.content);
-      const headingPathNorm = normalizeForFts(chunk.headingPath);
-      const bodyNorm = normalizeForFts(chunk.content);
-
-      db.prepare(`
-        INSERT INTO document_chunks (id, document_id, chunk_index, heading_path, heading_level, content, content_hash, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(cid, id, idx, chunk.headingPath || '', chunk.headingLevel || 0, chunk.content, chunkHash, now, now);
-
-      db.prepare(`
-        INSERT INTO document_chunks_fts (chunk_id, document_id, title, topic_key, type, scope, project, heading_path, body)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(cid, id, titleNorm, topicKeyNorm, typeNorm, scopeNorm, projectNorm, headingPathNorm, bodyNorm);
-    });
+    db.prepare(`
+      INSERT INTO document_fts (document_id, title, h1, h2, h3, h4, h5, h6, body)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, titleNorm, h1Norm, h2Norm, h3Norm, h4Norm, h5Norm, h6Norm, bodyNorm);
 
     const tags = frontmatter.tags || [];
     for (const tag of tags) {
@@ -94,51 +91,37 @@ function indexDocument(config, docPath, rawContent, fileMtimeMs = null) {
   })();
 
   if (config?.embeddings?.enabled) {
-    const newChunkIds = Array.from({ length: chunks.length }, (_, idx) => chunkId(id, idx));
     import('../embeddings/queue.js')
       .then(({ enqueueChunks, markStale }) => {
-        if (oldChunkIds.length) markStale(config, oldChunkIds);
-        enqueueChunks(config, newChunkIds);
+        if (wasExisting) markStale(config, [id]);
+        enqueueChunks(config, [id]);
       })
       .catch((err) => {
         if (typeof process !== 'undefined' && process.stderr) {
           process.stderr.write(`[mixgram] embeddings queue error: ${err?.message ?? err}\n`);
         }
       });
-    if (oldChunkIds.length) {
-      import('../embeddings/vectorStore.js')
-        .then(({ removeChunks }) => removeChunks(config, oldChunkIds))
-        .catch(() => {});
-    }
   }
 
-  return { id, chunkCount: chunks.length };
+  return { id };
 }
 
 function removeDocumentFromIndex(config, documentId) {
   const db = getDb(config);
-  const chunkIds = db.prepare('SELECT id FROM document_chunks WHERE document_id = ?').all(documentId).map((r) => r.id);
-  if (config?.embeddings?.enabled && chunkIds.length) {
+  if (config?.embeddings?.enabled) {
     import('../embeddings/queue.js')
-      .then(({ markStale }) => markStale(config, chunkIds))
-      .catch((err) => {
-        if (typeof process !== 'undefined' && process.stderr) {
-          process.stderr.write(`[mixgram] embeddings markStale error: ${err?.message ?? err}\n`);
-        }
-      });
+      .then(({ markStale }) => markStale(config, [documentId]))
+      .catch(() => {});
     import('../embeddings/vectorStore.js')
-      .then(({ removeChunks }) => removeChunks(config, chunkIds))
+      .then(({ removeChunks }) => removeChunks(config, [documentId]))
       .catch(() => {});
   }
-  for (const cid of chunkIds) {
-    db.prepare('DELETE FROM embedding_jobs WHERE chunk_id = ?').run(cid);
-  }
-  const ftsRowids = db.prepare('SELECT rowid FROM document_chunks_fts WHERE document_id = ?').all(documentId);
+  db.prepare('DELETE FROM embedding_jobs WHERE chunk_id = ?').run(documentId);
   db.transaction(() => {
+    const ftsRowids = db.prepare('SELECT rowid FROM document_fts WHERE document_id = ?').all(documentId);
     for (const { rowid } of ftsRowids) {
-      db.prepare('DELETE FROM document_chunks_fts WHERE rowid = ?').run(rowid);
+      db.prepare('DELETE FROM document_fts WHERE rowid = ?').run(rowid);
     }
-    db.prepare('DELETE FROM document_chunks WHERE document_id = ?').run(documentId);
     db.prepare('DELETE FROM document_tags WHERE document_id = ?').run(documentId);
     db.prepare('DELETE FROM documents WHERE id = ?').run(documentId);
   })();

@@ -84,23 +84,23 @@ async function processNextJob(config) {
     return true;
   }
 
-  const chunkRow = db.prepare(`
-    SELECT c.id, c.document_id, c.content_hash, c.content
-    FROM document_chunks c
-    WHERE c.id = ?
+  const docRow = db.prepare(`
+    SELECT id, id AS document_id, content_hash, body AS content
+    FROM documents
+    WHERE id = ?
   `).get(job.chunk_id);
-  if (!chunkRow) {
+  if (!docRow?.content) {
     db.prepare(`UPDATE embedding_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`)
-      .run(STATUS.FAILED, 'chunk not found', now, job.id);
+      .run(STATUS.FAILED, 'document not found or empty body', now, job.id);
     return true;
   }
 
   try {
-    const embedding = await embedder.embed(chunkRow.content);
+    const embedding = await embedder.embed(docRow.content);
     await vectorStore.insert(config, {
-      chunk_id: chunkRow.id,
-      document_id: chunkRow.document_id,
-      content_hash: chunkRow.content_hash,
+      chunk_id: docRow.id,
+      document_id: docRow.document_id,
+      content_hash: docRow.content_hash,
       embedding
     });
     db.prepare(`UPDATE embedding_jobs SET status = ?, updated_at = ? WHERE id = ?`)

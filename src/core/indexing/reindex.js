@@ -28,11 +28,10 @@ function listMarkdownPaths(config) {
 function clearIndex(config) {
   const db = getDb(config);
   db.transaction(() => {
-    const ftsRowids = db.prepare('SELECT rowid FROM document_chunks_fts').all();
+    const ftsRowids = db.prepare('SELECT rowid FROM document_fts').all();
     for (const { rowid } of ftsRowids) {
-      db.prepare('DELETE FROM document_chunks_fts WHERE rowid = ?').run(rowid);
+      db.prepare('DELETE FROM document_fts WHERE rowid = ?').run(rowid);
     }
-    db.prepare('DELETE FROM document_chunks').run();
     db.prepare('DELETE FROM document_tags').run();
     db.prepare('DELETE FROM documents').run();
   })();
@@ -60,22 +59,32 @@ function fullReindex(config) {
 }
 
 /**
- * Incremental reindex: index all found .md files, then remove from index any document
- * whose path is no longer present on disk (manual delete). Does not clear the index first.
+ * Incremental reindex: scan all .md files; skip unchanged (same path + file_mtime_ms);
+ * index new or changed; remove from index documents whose path is no longer on disk.
+ * Does not clear the index first.
+ * @returns {{ scanned: number, skipped: number, indexed: number, removed: number, totalPaths: number }}
  */
 function incrementalReindex(config) {
   const paths = listMarkdownPaths(config);
   const pathsSet = new Set(paths.map((p) => path.normalize(p)));
+  const db = getDb(config);
+  const getStored = db.prepare('SELECT id, file_mtime_ms FROM documents WHERE path = ?');
   let indexed = 0;
+  let skipped = 0;
   for (const filePath of paths) {
     try {
-      const raw = fs.readFileSync(filePath, 'utf8');
+      const norm = path.normalize(filePath);
       const stat = fs.statSync(filePath);
+      const row = getStored.get(norm);
+      if (row != null && row.file_mtime_ms != null && row.file_mtime_ms === stat.mtimeMs) {
+        skipped++;
+        continue;
+      }
+      const raw = fs.readFileSync(filePath, 'utf8');
       indexDocument(config, filePath, raw, stat.mtimeMs);
       indexed++;
     } catch (_) {}
   }
-  const db = getDb(config);
   const allDocs = db.prepare('SELECT id, path FROM documents').all();
   let removed = 0;
   for (const row of allDocs) {
@@ -85,7 +94,7 @@ function incrementalReindex(config) {
       removed++;
     }
   }
-  return { indexed, removed, totalPaths: paths.length };
+  return { scanned: paths.length, skipped, indexed, removed, totalPaths: paths.length };
 }
 
 /**

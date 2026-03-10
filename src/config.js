@@ -15,13 +15,16 @@ const DEFAULT_CONFIG = {
   sqlitePath: '~/.mixgram/index.db',
   watch: true,
   indexing: {
-    chunkSize: 1200,
-    chunkOverlap: 120,
     reindexOnStartup: true,
+    includeCodeBlocks: false,
     ftsWeights: {
       title: 10.0,
-      topicKey: 8.0,
-      heading: 5.0,
+      h1: 8.0,
+      h2: 6.0,
+      h3: 5.0,
+      h4: 4.0,
+      h5: 3.0,
+      h6: 2.0,
       body: 1.0
     }
   },
@@ -55,7 +58,7 @@ function resolvePaths(config, baseDir, projectBaseDir = null) {
   return {
     ...config,
     homeMemoryRoot: path.isAbsolute(homeRoot) ? homeRoot : path.resolve(base, homeRoot),
-    projectMemoryRoot: path.resolve(projectBase, config.projectMemoryRoot ?? './mixgram'),
+    projectMemoryRoot: path.resolve(projectBase, config.projectMemoryRoot ?? './docs'),
     sqlitePath: path.isAbsolute(sqlite) ? sqlite : path.resolve(base, sqlite)
   };
 }

@@ -1,4 +1,4 @@
--- documents
+-- documents (one row per doc; body and section tree stored here)
 CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY,
   path TEXT NOT NULL UNIQUE,
@@ -17,21 +17,10 @@ CREATE TABLE IF NOT EXISTS documents (
   deleted_at TEXT,
   revision_count INTEGER NOT NULL DEFAULT 1,
   duplicate_count INTEGER NOT NULL DEFAULT 0,
-  embedding_status TEXT NOT NULL DEFAULT 'disabled'
-);
-
-CREATE TABLE IF NOT EXISTS document_chunks (
-  id TEXT PRIMARY KEY,
-  document_id TEXT NOT NULL,
-  chunk_index INTEGER NOT NULL,
-  heading_path TEXT,
-  heading_level INTEGER,
-  content TEXT NOT NULL,
-  token_count INTEGER,
-  content_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY(document_id) REFERENCES documents(id)
+  embedding_status TEXT NOT NULL DEFAULT 'disabled',
+  body TEXT,
+  structure TEXT,
+  sections_index TEXT
 );
 
 CREATE TABLE IF NOT EXISTS document_tags (
@@ -67,20 +56,19 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
   attempts INTEGER NOT NULL DEFAULT 0,
   last_error TEXT,
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY(chunk_id) REFERENCES document_chunks(id)
+  updated_at TEXT NOT NULL
 );
 
--- FTS5: content must be not null for columns; use empty string for missing
-CREATE VIRTUAL TABLE IF NOT EXISTS document_chunks_fts USING fts5(
-  chunk_id UNINDEXED,
+-- FTS5: one row per document (title, h1–h6, body)
+CREATE VIRTUAL TABLE IF NOT EXISTS document_fts USING fts5(
   document_id UNINDEXED,
   title,
-  topic_key,
-  type,
-  scope,
-  project,
-  heading_path,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
   body,
   tokenize = 'unicode61 remove_diacritics 2'
 );

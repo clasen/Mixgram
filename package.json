@@ -1,6 +1,6 @@
 {
   "name": "mixgram",
-  "version": "1.1.4",
+  "version": "1.1.8",
   "description": "MCP memory server with Markdown source of truth and SQLite FTS5.",
   "keywords": [
     "mcp",
@@ -33,19 +33,32 @@
   "scripts": {
     "start": "node index.js",
     "test": "node spec/run-tests.js",
-    "test:visual": "node spec/run-tests.js --visual"
+    "test:visual": "node spec/run-tests.js --visual",
+    "test:large": "node spec/test-large-document.js",
+    "bench:indexing": "node spec/bench-indexing.js",
+    "bench:embed": "node spec/bench-indexing.js --embed",
+    "bench:search": "node spec/bench-search.js",
+    "bench:search:embed": "node spec/bench-search.js --embed",
+    "bench:all": "npm run bench:indexing && npm run bench:embed && npm run bench:search && npm run bench:search:embed",
+    "duplication": "jscpd src",
+    "deadcode": "knip",
+    "quality": "npm run duplication && npm run deadcode"    
   },
   "dependencies": {
     "@huggingface/transformers": "^3.4.2",
     "@modelcontextprotocol/sdk": "^1.0.0",
     "better-sqlite3": "^12.6.2",
     "chokidar": "^4.0.1",
+    "glob": "^13.0.6",
     "gray-matter": "^4.0.3",
-    "glob": "^13.0.0",
     "remark-parse": "^11.0.0",
     "sqlite-vec": "^0.1.6",
     "unified": "^11.0.5",
     "unist-util-visit": "^5.0.0",
     "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "jscpd": "^4.0.8",
+    "knip": "^5.86.0"
   }
 }

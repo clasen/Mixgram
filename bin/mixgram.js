@@ -12,6 +12,10 @@ import { getToolByName, listToolNames, parseToolArgs, formatToolHelp } from '../
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PKG = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
 
 const SUBCOMMAND = process.argv[2];
 const ARG = process.argv[3];
@@ -101,10 +105,8 @@ const MIXGRAM_ENTRY = {
 };
 
 const CURSOR_MIXGRAM_ENTRY = {
-  ...MIXGRAM_ENTRY,
-  // Cursor interpolates this to the active workspace root, so project memory
-  // stays under <workspace>/mixgram instead of the parent process cwd.
-  cwd: '${workspaceFolder}'
+  command: 'mixgram',
+  args: ['mcp', '--project-memory', '${workspaceFolder}/docs']
 };
 
 function cursorMcpPath() {
@@ -216,6 +218,7 @@ Commands:
   mcp [options]        Run the MCP server (stdio). Use this in your client config.
   setup <client>       Register Mixgram with an MCP client.
   help [tool]          Show help; with optional tool name, show options for that tool.
+  -v, --version        Print version from package and exit.
   <tool> [options]     Run an MCP tool by name. Tools:
 ${toolLines}
 
@@ -223,21 +226,20 @@ mcp options (and env / config file):
   --config <path>      Config file (default: ./.mixgram/config.json or ~/.mixgram/config.json)
   --embeddings         Enable semantic search (or embeddings.enabled in config)
   --watch              Watch files and reindex on change
-  --home <path>        Home memory root (default: ./home/memory)
-  --project-memory <path>  Project memory root (default: ./mixgram, relative to repo)
-  --projects <path>    Projects root (default: ./projects)
-  --sqlite-path <path> SQLite index path (default: ./.mixgram/index.db)
+  --home <path>        Home memory root (default: ~/.mixgram/docs)
+  --project-memory <path>  Project memory root (default: ./docs, relative to repo)
+  --sqlite-path <path> SQLite index path (default: ~/.mixgram/index.db)
 
   Env: MIXGRAM_CONFIG, MIXGRAM_EMBEDDINGS_ENABLED, MIXGRAM_HOME, MIXGRAM_PROJECT_MEMORY,
-       MIXGRAM_PROJECTS, MIXGRAM_SQLITE_PATH, MIXGRAM_WATCH
+       MIXGRAM_SQLITE_PATH, MIXGRAM_WATCH
 
 Setup targets:
   cursor               Cursor IDE
   gemini-cli           Gemini CLI
   codex                Codex
 
-Example (Cursor): "mixgram": { "command": "mixgram", "args": ["mcp"] }
-With embeddings:   "args": ["mcp", "--embeddings"]
+Example (Cursor): "mixgram": { "command": "mixgram", "args": ["mcp", "--project-memory", "${workspaceFolder}/docs"] }
+With embeddings:   "args": ["mcp", "--project-memory", "${workspaceFolder}/docs", "--embeddings"]
 Config file:       .mixgram/config.json or ~/.mixgram/config.json
 
   npm install -g mixgram
@@ -245,6 +247,11 @@ Config file:       .mixgram/config.json or ~/.mixgram/config.json
 }
 
 async function main() {
+  if (SUBCOMMAND === '-v' || SUBCOMMAND === '--version') {
+    console.log(PKG.version);
+    return;
+  }
+
   if (SUBCOMMAND === 'mcp') {
     const { overrides, baseDir, projectBaseDir } = loadCliConfig();
     await run(overrides, baseDir, projectBaseDir)

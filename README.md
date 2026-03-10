@@ -9,7 +9,7 @@ MCP memory server compatible with [Engram](https://github.com/gentleman-programm
 ### Advantages over Engram
 
 - **Visible, editable docs** — As you advance with agentic development you see the actual documentation files on disk. You can open them, read them, and edit them manually; the agent’s memory is not hidden in a black box.
-- **Versioned** — Memory lives in Markdown under your repo (e.g. `mixgram/<type>/` for project scope) or in a shared home (e.g. `home/memory/` for cross-project). Commit, branch, and diff as with any other docs.
+- **Versioned** — Memory lives in Markdown under your repo (e.g. `docs/<type>/` by default for project scope) or in a shared home (e.g. `home/memory/` for cross-project). Commit, branch, and diff as with any other docs.
 - **No semantic deps required** — Core experience is text-only (FTS5). No need to install embeddings or vector libs unless you opt in.
 
 ---
@@ -57,37 +57,35 @@ Arguments are passed as `--key value`. Booleans use `--flag` or `--no-flag`. Arr
 | `--embeddings` | `MIXGRAM_EMBEDDINGS_ENABLED` | Enable optional semantic (hybrid) search. |
 | `--watch` | `MIXGRAM_WATCH` | Watch files and reindex on change. |
 | `--home <path>` | `MIXGRAM_HOME` | Home memory root (cross-project). |
-| `--project-memory <path>` | `MIXGRAM_PROJECT_MEMORY` | Project memory root (default: `./mixgram`, relative to repo). |
+| `--project-memory <path>` | `MIXGRAM_PROJECT_MEMORY` | Project memory root (default: `./docs`, relative to repo). |
 | `--projects <path>` | `MIXGRAM_PROJECTS` | Projects root (legacy). |
 | `--sqlite-path <path>` | `MIXGRAM_SQLITE_PATH` | SQLite index path. |
 
 **Example — Cursor**
 
-Add to Cursor’s MCP config (or run `mixgram setup cursor`):
+Create `.cursor/mcp.json` in your repo (recommended, and required for Cursor Cloud Agents) or add the same config to `~/.cursor/mcp.json` (or run `mixgram setup cursor`):
 
 ```json
 {
   "mcpServers": {
     "mixgram": {
       "command": "mixgram",
-      "args": ["mcp"],
-      "cwd": "${workspaceFolder}"
+      "args": ["mcp", "--project-memory", "${workspaceFolder}/docs"]
     }
   }
 }
 ```
 
-With embeddings and custom paths via args:
+With embeddings and custom paths:
 
 ```json
 "mixgram": {
   "command": "mixgram",
-  "args": ["mcp", "--embeddings", "--home", "/data/memory", "--project-memory", "./specs"],
-  "cwd": "${workspaceFolder}"
+  "args": ["mcp", "--project-memory", "${workspaceFolder}/docs", "--embeddings", "--home", "/data/memory"]
 }
 ```
 
-Set `cwd` to `${workspaceFolder}` so relative project paths like `./mixgram` resolve inside the active repo instead of the parent process directory. Or use a config file (see below) and just `"args": ["mcp"]`. Restart Cursor after changing config.
+Restart Cursor after changing config.
 
 ---
 
@@ -117,7 +115,7 @@ Example **`.mixgram/config.json`** (project or home):
 ```json
 {
   "homeMemoryRoot": "~/.mixgram/docs",
-  "projectMemoryRoot": "./mixgram",
+  "projectMemoryRoot": "./docs",
   "sqlitePath": "~/.mixgram/index.db",
   "embeddings": {
     "enabled": true
@@ -130,7 +128,7 @@ Paths in the config file are relative to the config file’s directory (project)
 | Option | Default | Description |
 |--------|---------|-------------|
 | `homeMemoryRoot` | `~/.mixgram/docs` | Cross-project memory (Markdown files). |
-| `projectMemoryRoot` | `./mixgram` | Project memory in the current repo (e.g. `mixgram/architecture/`, `mixgram/decisions/`). You can use another folder name, e.g. `./specs` for `specs/architecture/`. |
+| `projectMemoryRoot` | `./docs` | Project memory in the current repo (e.g. `docs/architecture/`, `docs/decisions/`). You can use another folder name, e.g. `./specs` for `specs/architecture/`. |
 | `sqlitePath` | `~/.mixgram/index.db` | SQLite index (FTS5 + optional vectors). |
 | `watch` | `true` | Watch files and reindex on change. |
 | `indexing.reindexOnStartup` | `true` | Full reindex when server starts. |
@@ -145,7 +143,7 @@ import { run } from 'mixgram/src/mcp/server.js';
 
 await run({
   homeMemoryRoot: '/data/memory',
-  projectMemoryRoot: '/path/to/repo/mixgram',
+  projectMemoryRoot: '/path/to/repo/docs',
   sqlitePath: '/data/.mixgram/index.db',
   watch: true
 });
@@ -171,7 +169,7 @@ Core flow: save Markdown-backed documents, search with FTS5, get context.
 }
 ```
 
-- **scope** `project` → file under `<repo>/mixgram/<type>/...` (e.g. `mixgram/architecture/`, `mixgram/decisions/`).
+- **scope** `project` → file under `<repo>/docs/<type>/...` (e.g. `docs/architecture/`, `docs/decisions/`).
 - **scope** `home` → file under `home/memory/...` (cross-project).
 - Same `topic_key` + scope + project → **update** existing doc; otherwise create.
 
@@ -240,12 +238,12 @@ Useful after cloning a repo or editing Markdown by hand:
 { "full": true }
 ```
 
-- `full: true` — rebuild entire index from `home/**/*.md` and `mixgram/**/*.md` (project memory in repo).
+- `full: true` — rebuild entire index from `home/**/*.md` and `docs/**/*.md` (project memory in repo).
 - `full: false` (default) — incremental (by mtime).
 
 Manual edit example:
 
-1. Edit a `.md` file under `home/memory` or `mixgram/<type>/` in your repo.
+1. Edit a `.md` file under `home/memory` or `docs/<type>/` in your repo.
 2. Call `mem_reindex({ full: true })` (or run with `watch: true` so changes are picked up).
 3. `mem_search` and `mem_get_observation` reflect the new content.
 
@@ -282,7 +280,7 @@ When `embeddings.enabled` is `true` and the optional embedding stack is availabl
 
 - **Saves** are durable and searchable by text immediately; embeddings are queued and processed in the background.
 - **Search** becomes **hybrid**: FTS + vector similarity, blended with `search.ftsWeight` and `search.semanticWeight` (e.g. 0.7 and 0.3).
-- A **worker** runs in the background and processes the embedding queue (e.g. every 2 seconds).
+- A **worker** runs in a separate process and processes the embedding queue (e.g. every 2 seconds). Query embeddings for hybrid search are also computed in that process via IPC, so the main MCP server never loads `@huggingface/transformers` and is not affected by native/ONNX crashes in the embedding stack.
 
 ### Enable embeddings
 
