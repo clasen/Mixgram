@@ -95,3 +95,12 @@ export const semanticFallbackDoc = {
   topic_key: 'test/semantic-fallback',
   content: 'Text for semantic fallback test.'
 };
+
+/** Used to test FTS5 OR query: save then search with "mcp OR \"model context protocol\"" */
+export const noteMcpArchitecture = {
+  title: 'Other note',
+  type: 'architecture',
+  content: 'Model Context Protocol',
+  scope: 'project',
+  project: null
+};

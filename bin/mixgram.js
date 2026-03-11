@@ -5,11 +5,12 @@
  *   mixgram mcp [options]    — run MCP server (stdio)
  *   mixgram setup <client>   — add Mixgram to Cursor / Gemini CLI / Codex config
  */
-import { run } from '../src/mcp/server.js';
+import { run, startEmbeddingWorker } from '../src/mcp/server.js';
 import { loadConfig } from '../src/config.js';
 import { closeDb } from '../src/db/sqlite.js';
 import { createToolHandlers } from '../src/mcp/tools.js';
 import { getToolByName, listToolNames, parseToolArgs, formatToolHelp } from '../src/mcp/cli-adapter.js';
+import { processNextJob, enqueueChunks } from '../src/core/embeddings/queue.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -327,14 +328,29 @@ async function main() {
     const args = parseToolArgs(toolDef, toolArgv);
     const { overrides, baseDir, projectBaseDir } = loadCliConfig();
     const config = loadConfig(overrides, baseDir, projectBaseDir);
+    let cleanupEmbeddingWorker = () => {};
+    if (config.embeddings?.enabled) {
+      cleanupEmbeddingWorker = startEmbeddingWorker(config);
+    }
     const handlers = createToolHandlers(config);
     try {
       const result = await handlers[SUBCOMMAND](args);
+      if ((SUBCOMMAND === 'mem_save' || SUBCOMMAND === 'mem_update') && config.embeddings?.enabled) {
+        let docId = null;
+        try {
+          const out = JSON.parse(result?.content?.[0]?.text || '{}');
+          if (out.id) docId = out.id;
+        } catch (_) {}
+        if (docId) enqueueChunks(config, [docId]);
+        while (await processNextJob(config)) {}
+      }
       const text = result?.content?.[0]?.text;
       if (text != null) console.log(text);
     } catch (err) {
       console.error(err);
       process.exit(1);
+    } finally {
+      cleanupEmbeddingWorker();
     }
     return;
   }

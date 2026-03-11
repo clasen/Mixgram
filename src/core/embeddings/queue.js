@@ -6,8 +6,9 @@ import { getDb } from '../../db/sqlite.js';
 const MODEL_NAME = 'Xenova_multilingual_e5_large';
 const STATUS = { PENDING: 'pending', PROCESSING: 'processing', COMPLETED: 'completed', FAILED: 'failed', STALE: 'stale' };
 
+/** Queue key for jobs; use a single normalized name so enqueue and process always match. */
 function getModelName(config) {
-  return config?.embeddings?.model || MODEL_NAME;
+  return MODEL_NAME;
 }
 
 /**

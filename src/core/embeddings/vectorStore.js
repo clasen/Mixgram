@@ -89,7 +89,7 @@ async function search(config, queryEmbedding, k = 20, options = {}) {
      JOIN ${cacheTable} c ON c.id = v.rowid
      WHERE v.embedding MATCH ? AND k = ?`
   ).all(emb, Math.min(k, 100));
-  const threshold = options.similarityThreshold ?? config.embeddings?.similarityThreshold ?? 0.87;
+  const threshold = options.similarityThreshold ?? config.embeddings?.similarityThreshold ?? 0.80;
   return rows
     .filter((r) => (1 - r.distance) >= threshold)
     .map((r) => ({ chunk_id: r.chunk_id, document_id: r.document_id, distance: r.distance }));

@@ -768,7 +768,7 @@ const embedding = output.tolist();  // 1024-dim, L2-normalized
    ```
    For tag/scope filtering, `k` is increased and results are filtered in application code.
 3. **Join** with `cache_<suffix>` on `cache.id = vec.rowid` to get chunk_id, document_id, etc., then join to `document_chunks` / `documents` for full metadata and snippets.
-4. **Similarity threshold:** sqlite-vec returns **cosine distance** (0 = identical). Convert to similarity as `similarity = 1 - distance`. Accept a hit only if `similarity >= similarityThreshold` (default `0.87`, from config `embeddings.similarityThreshold`).
+4. **Similarity threshold:** sqlite-vec returns **cosine distance** (0 = identical). Convert to similarity as `similarity = 1 - distance`. Accept a hit only if `similarity >= similarityThreshold` (default `0.80`, from config `embeddings.similarityThreshold`).
 5. **Optional:** TTL, tag/scope filters (e.g. require all requested tags or scope).
 
 ### 13.7.6 Dependencies for replication
@@ -792,7 +792,7 @@ Node must support native addons for `better-sqlite3` and `sqlite-vec`. First run
 | Pooling/norm    | mean pooling, normalize: true |
 | DB              | SQLite (better-sqlite3) |
 | Vector index    | sqlite-vec vec0, cosine |
-| Match rule      | cosine similarity ≥ 0.87 (configurable via `embeddings.similarityThreshold`) |
+| Match rule      | cosine similarity ≥ 0.80 (configurable via `embeddings.similarityThreshold`) |
 
 ---
 
@@ -951,7 +951,7 @@ src/
     "workerConcurrency": 2,
     "maxRetries": 3,
     "queueOnWrite": true,
-    "similarityThreshold": 0.87
+    "similarityThreshold": 0.80
   },
   "search": {
     "mode": "fts-only",

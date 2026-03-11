@@ -17,12 +17,13 @@ function suggestTopicKey(title, content = '', type = 'generated_note') {
 function createToolHandlers(config) {
   return {
     mem_save: async (args) => {
+      const topicKey = args.topic_key ?? suggestTopicKey(args.title, args.content ?? '', args.type || 'generated_note');
       const result = saveDocument(config, {
         title: args.title,
         type: args.type || 'generated_note',
         scope: args.scope || 'project',
         project: args.project ?? null,
-        topic_key: args.topic_key ?? null,
+        topic_key: topicKey,
         content: args.content ?? '',
         session_id: args.session_id ?? null,
         id: args.id ?? null,
@@ -54,12 +55,58 @@ function createToolHandlers(config) {
     },
 
     mem_search: async (args) => {
-      const results = await search(config, {
-        query: args.query,
-        scopeMode: args.scope_mode || config.search?.defaultScopeMode || 'merged',
-        project: args.project ?? null,
-        limit: args.limit ?? config.search?.defaultLimit ?? 10
-      });
+      const scopeMode = args.scope_mode || config.search?.defaultScopeMode || 'merged';
+      const project = args.project ?? null;
+      const limit = args.limit ?? config.search?.defaultLimit ?? 10;
+      const query = args.query?.trim();
+      if (!query) {
+        return { content: [{ type: 'text', text: JSON.stringify({ results: [] }) }] };
+      }
+
+      const ftsResults = await search(config, { query, scopeMode, project, limit });
+      let results = [...ftsResults];
+
+      if (config.embeddings?.enabled && config.getQueryEmbedding) {
+        try {
+          const { getVectorStore } = await import('../core/embeddings/vectorStore.js');
+          const vectorStore = await getVectorStore(config);
+          if (vectorStore) {
+            const queryVec = await config.getQueryEmbedding(query);
+            if (queryVec) {
+              const semanticThreshold = config.embeddings?.similarityThreshold ?? 0.75;
+              const vecResults = await vectorStore.search(config, queryVec, Math.max(limit * 2, 20), { similarityThreshold: semanticThreshold });
+              const db = getDb(config);
+              const seen = new Set(results.map((r) => r.documentId));
+              const semanticList = [];
+              for (const v of vecResults) {
+                if (seen.has(v.document_id)) continue;
+                const row = db.prepare(
+                  'SELECT id, title, topic_key, type, scope, project, created_at, body FROM documents WHERE id = ? AND deleted_at IS NULL'
+                ).get(v.document_id);
+                if (!row) continue;
+                if (scopeMode === 'project-only' && (row.scope !== 'project' || row.project !== project)) continue;
+                if (scopeMode === 'home-only' && row.scope !== 'home') continue;
+                if (scopeMode === 'merged' && project && row.scope === 'project' && row.project !== project) continue;
+                seen.add(v.document_id);
+                const snippet = (row.body || '').slice(0, 200).trim();
+                semanticList.push({
+                  documentId: row.id,
+                  title: row.title,
+                  topicKey: row.topic_key,
+                  type: row.type,
+                  scope: row.scope,
+                  project: row.project,
+                  created: row.created_at || null,
+                  snippet: snippet || '',
+                  score: 1 - v.distance
+                });
+              }
+              results = [...semanticList, ...results].slice(0, limit);
+            }
+          }
+        } catch (_) {}
+      }
+
       return { content: [{ type: 'text', text: JSON.stringify({ results }) }] };
     },
 

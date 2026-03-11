@@ -39,7 +39,7 @@ const DEFAULT_CONFIG = {
     workerConcurrency: 2,
     maxRetries: 3,
     queueOnWrite: true,
-    similarityThreshold: 0.87
+    similarityThreshold: 0.80
   },
   search: {
     mode: 'fts-only',

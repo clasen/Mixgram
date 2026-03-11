@@ -44,6 +44,54 @@ function makeQueryEmbedder(child) {
   };
 }
 
+/**
+ * Start the embedding worker and set config.getQueryEmbedding for use by mem_search.
+ * Used by the CLI when running tools with --embeddings so that semantic search works.
+ * Returns a cleanup function to kill the worker and remove the temp config file.
+ */
+function startEmbeddingWorker(config) {
+  if (!config?.embeddings?.enabled || config.getQueryEmbedding) {
+    return () => {};
+  }
+  try {
+    embeddingWorkerConfigPath = path.join(
+      os.tmpdir(),
+      `mixgram-worker-config-${process.pid}-${Date.now()}.json`
+    );
+    fs.writeFileSync(embeddingWorkerConfigPath, JSON.stringify(config), 'utf8');
+    const workerPath = path.join(__dirname, '..', 'core', 'embeddings', 'worker-process.js');
+    embeddingWorkerChild = fork(workerPath, [], {
+      stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+      env: { ...process.env, MIXGRAM_WORKER_CONFIG: embeddingWorkerConfigPath }
+    });
+    config.getQueryEmbedding = makeQueryEmbedder(embeddingWorkerChild);
+    const cleanup = () => {
+      if (embeddingWorkerChild) {
+        try { embeddingWorkerChild.kill(); } catch (_) {}
+        embeddingWorkerChild = null;
+      }
+      config.getQueryEmbedding = null;
+      if (embeddingWorkerConfigPath && fs.existsSync(embeddingWorkerConfigPath)) {
+        try { fs.unlinkSync(embeddingWorkerConfigPath); } catch (_) {}
+        embeddingWorkerConfigPath = null;
+      }
+    };
+    embeddingWorkerChild.on('exit', () => {
+      config.getQueryEmbedding = null;
+      if (embeddingWorkerConfigPath && fs.existsSync(embeddingWorkerConfigPath)) {
+        try { fs.unlinkSync(embeddingWorkerConfigPath); } catch (_) {}
+        embeddingWorkerConfigPath = null;
+      }
+    });
+    return cleanup;
+  } catch (err) {
+    if (typeof process !== 'undefined' && process.stderr) {
+      process.stderr.write(`[mixgram] embeddings worker start failed: ${err?.message ?? err}\n`);
+    }
+    return () => {};
+  }
+}
+
 function createServer(configOverrides = {}, baseDir = null, projectBaseDir = null) {
   const config = loadConfig(configOverrides, baseDir, projectBaseDir);
   const mcpServer = new McpServer(
@@ -98,42 +146,19 @@ async function run(configOverrides = {}, baseDir = null, projectBaseDir = null) 
     }
   }
   if (config.embeddings?.enabled) {
-    try {
-      embeddingWorkerConfigPath = path.join(
-        os.tmpdir(),
-        `mixgram-worker-config-${process.pid}-${Date.now()}.json`
-      );
-      fs.writeFileSync(embeddingWorkerConfigPath, JSON.stringify(config), 'utf8');
-      const workerPath = path.join(__dirname, '..', 'core', 'embeddings', 'worker-process.js');
-      embeddingWorkerChild = fork(workerPath, [], {
-        stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
-        env: { ...process.env, MIXGRAM_WORKER_CONFIG: embeddingWorkerConfigPath }
-      });
-      config.getQueryEmbedding = makeQueryEmbedder(embeddingWorkerChild);
-      embeddingWorkerChild.on('exit', (code, signal) => {
+    const cleanup = startEmbeddingWorker(config);
+    if (cleanup) {
+      embeddingWorkerChild?.on('exit', (code, signal) => {
         if (code !== 0 && code != null && process.stderr) {
           process.stderr.write(`[mixgram] embeddings worker exited: code=${code} signal=${signal}\n`);
         }
-        config.getQueryEmbedding = null;
-        if (embeddingWorkerConfigPath && fs.existsSync(embeddingWorkerConfigPath)) {
-          try { fs.unlinkSync(embeddingWorkerConfigPath); } catch (_) {}
-          embeddingWorkerConfigPath = null;
-        }
+        cleanup();
       });
-      process.on('exit', () => {
-        if (embeddingWorkerChild) embeddingWorkerChild.kill();
-        if (embeddingWorkerConfigPath && fs.existsSync(embeddingWorkerConfigPath)) {
-          try { fs.unlinkSync(embeddingWorkerConfigPath); } catch (_) {}
-        }
-      });
-    } catch (err) {
-      if (typeof process !== 'undefined' && process.stderr) {
-        process.stderr.write(`[mixgram] embeddings worker start failed: ${err?.message ?? err}\n`);
-      }
+      process.on('exit', () => cleanup());
     }
   }
   const transport = new StdioServerTransport();
   await mcpServer.connect(transport);
 }
 
-export { createServer, run };
+export { createServer, run, startEmbeddingWorker };

@@ -18,19 +18,29 @@ function getBm25Weights(config) {
 // FTS5 uses "/" for NEAR (e.g. term/5) and "-" for NOT; dash-like chars between words break parsing.
 const FTS5_NEAR_SLASH = /\//g;
 const FTS5_NOT_HYPHEN = /(?<=\w)[-\u2010-\u2015\u2212](?=\w)/g; // hyphen, en/em-dash, minus
+// FTS5 operators are case-sensitive; normalizeForFts lowercases the string, so we restore them after.
+const FTS5_OPERATOR_RESTORE = [
+  [/\band\b/g, 'AND'],
+  [/\bor\b/g, 'OR'],
+  [/\bnot\b/g, 'NOT']
+];
 
 /**
  * Normalize query for FTS5: same as indexed text (NFD, remove diacritics, lowercase).
  * Replaces "/" with space so it is not interpreted as FTS5 NEAR syntax (e.g. term/5).
  * Replaces "-" (and Unicode dashes) between word chars with space so "alchemy-tycoon" is not parsed as "alchemy" NOT "tycoon".
- * Leaves FTS5 operators (AND, OR, NOT, "phrase") intact.
+ * Restores FTS5 operators AND, OR, NOT to uppercase after normalization (FTS5 requires them case-sensitive).
  */
 function normalizeQuery(q) {
   if (q == null || typeof q !== 'string') return '';
   const trimmed = q.trim();
   const slashSafe = trimmed.replace(FTS5_NEAR_SLASH, ' ');
   const hyphenSafe = slashSafe.replace(FTS5_NOT_HYPHEN, ' ');
-  return normalizeForFts(hyphenSafe);
+  let out = normalizeForFts(hyphenSafe);
+  for (const [re, replacement] of FTS5_OPERATOR_RESTORE) {
+    out = out.replace(re, replacement);
+  }
+  return out;
 }
 
 /**

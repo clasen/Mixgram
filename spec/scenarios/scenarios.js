@@ -19,6 +19,7 @@ import {
   semanticPersistenceDoc,
   semanticPersistenceQuery,
   semanticFallbackDoc,
+  noteMcpArchitecture,
   PROJECT_NAME
 } from '../fixtures/realistic-content.js';
 import { toMarkdown } from '../../src/utils/markdown.js';
@@ -193,6 +194,36 @@ export const scenarios = [
         const data = parseRes(res).results;
         ok(Array.isArray(data), `mem_search("${query}") returns array`);
       }
+
+      reporter.endScenario(p, f);
+      return { passed: p, failed: f };
+    }
+  },
+  {
+    name: 'Search with OR query (FTS5 operator case)',
+    goal: 'mem_save then mem_search with query using OR (e.g. mcp OR "model context protocol") returns the saved document.',
+    run: async function (ctx) {
+      const { h, reporter } = ctx;
+      const parseRes = ctx.parse || parse;
+      let p = 0, f = 0;
+      const ok = (cond, msg) => { if (cond) p++; else f++; reporter.check(msg, cond); };
+
+      reporter.startScenario(this.name, this.goal);
+
+      const saveRes = await h.mem_save(noteMcpArchitecture);
+      const saveData = parseRes(saveRes);
+      reporter.step('mem_save', { title: noteMcpArchitecture.title, type: noteMcpArchitecture.type }, { id: saveData.id, created: saveData.created });
+      ok(saveData.success && saveData.id, 'mem_save success');
+
+      const searchRes = await h.mem_search({ query: 'mcp OR "model context protocol"', limit: 10 });
+      const searchData = parseRes(searchRes);
+      reporter.step('mem_search', { query: 'mcp OR "model context protocol"' }, searchData, { highlight: ['title', 'snippet'] });
+      ok(Array.isArray(searchData.results), 'results is array');
+      ok(searchData.results.length >= 1, 'OR query returns at least one result');
+      const found = searchData.results.some(
+        (r) => (r.title && r.title.includes('Other note')) || (r.snippet && (r.snippet.toLowerCase().includes('mcp') || r.snippet.toLowerCase().includes('model context protocol')))
+      );
+      ok(found, 'saved note is in OR query results');
 
       reporter.endScenario(p, f);
       return { passed: p, failed: f };

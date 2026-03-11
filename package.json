@@ -1,6 +1,6 @@
 {
   "name": "mixgram",
-  "version": "1.3.0",
+  "version": "1.3.2",
   "description": "MCP memory server with Markdown source of truth and SQLite FTS5.",
   "keywords": [
     "mcp",
@@ -40,6 +40,7 @@
     "bench:search": "node spec/bench-search.js",
     "bench:search:embed": "node spec/bench-search.js --embed",
     "bench:all": "npm run bench:indexing && npm run bench:embed && npm run bench:search && npm run bench:search:embed",
+    "example:embedding": "node examples/embedding-demo.js",
     "duplication": "jscpd src",
     "deadcode": "knip",
     "quality": "npm run duplication && npm run deadcode"    

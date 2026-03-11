@@ -38,16 +38,53 @@ Then use the `mixgram` command in your client config (see below). No extra depen
 | `mixgram help <tool>` | Show options for a specific MCP tool. |
 | `mixgram <tool> [--key value ...]` | Run any MCP tool from the command line (see below). |
 
-**MCP tools from the CLI** — Every MCP tool is automatically available as a subcommand. No extra wiring is needed: if a tool is added to the internal registry, it is exposed both to MCP clients and to the CLI. Use `mixgram help` to list tools and `mixgram help <tool>` (or `mixgram <tool> --help`) to see a tool’s options. Examples:
+**MCP tools from the CLI** — Every MCP tool is automatically available as a subcommand. No extra wiring is needed: if a tool is added to the internal registry, it is exposed both to MCP clients and to the CLI. Use `mixgram help` to list tools and `mixgram help <tool>` (or `mixgram <tool> --help`) to see a tool’s options.
+
+### Command-line examples
 
 ```bash
+# Stats and health
 mixgram mem_stats
+mixgram mem_stats --embeddings   # enable embeddings for this run (or use env/config, see below)
+
+# Save a note
+mixgram mem_save --title "My note" --content "Search" --type decision --project my-app
+mixgram mem_save --title "Other note" --content "Model Context Protocol" --type architecture
+
+# Search (default: merged scope, limit 10)
+mixgram mem_search --query "index"
 mixgram mem_search --query "index" --limit 5
-mixgram mem_save --title "My note" --content "Body" --type decision --project my-app
+mixgram mem_search --query "indexing" --scope-mode project-only --project my-app
+
+# OR-style query: use FTS5 keyword OR (and optional quoted phrases)
+mixgram mem_search --query 'mcp OR "model context protocol"' --limit 10
+mixgram mem_search --query 'cursor OR "model context protocol"' --limit 5
+
+# Reindex from disk (e.g. after editing Markdown by hand)
 mixgram mem_reindex --full
+
+# Context (recent or by query)
+mixgram mem_context --query "indexing decisions" --project my-app --limit 5
+mixgram mem_context --limit 5
 ```
 
+**Example: index and find by embedding (not FTS)** — Save a note with one wording, then search with different words that mean the same. FTS finds nothing; semantic search returns the doc:
+
+```bash
+# 1. Index a document (content about storing memory)
+mixgram mem_save --title "Where we store memory" --content "We keep agent memory in Markdown under docs/." --type decision --project demo --embeddings
+
+# 2. Search by meaning: query has no literal overlap with the text
+mixgram mem_search --query "where is the agent memory stored" --project demo --embeddings --limit 5
+```
+
+The first run embeds the document (worker runs in-process and processes the queue after save; the first time can take a few seconds while the embedding model loads). The second run uses the embedding worker to turn the query into a vector and returns the document by similarity. You can also use `npm run example:embedding` for a self-contained demo in a temp dir.
+
+**Query syntax (FTS5):** Search uses SQLite FTS5. You can use the operators `OR`, `AND`, `NOT` and quoted phrases. For an OR-style search (e.g. “mcp” or “model context protocol”), use the word `OR` in the query, not the pipe character: `--query 'mcp OR "model context protocol"'`. Unquoted terms are ANDed by default; use `OR` explicitly to match any of several terms.
+
 Arguments are passed as `--key value`. Booleans use `--flag` or `--no-flag`. Arrays use repeated flags: `--tags a --tags b`.
+
+**Enabling embeddings from the CLI:** For the MCP server use `mixgram mcp --embeddings`. For one-off tool runs (e.g. `mixgram mem_stats`, `mixgram mem_search`) you can pass `--embeddings` after the tool name, set the env var `MIXGRAM_EMBEDDINGS_ENABLED=1` (or `true`), or enable in `.mixgram/config.json` with `"embeddings": { "enabled": true }`. Example: `mixgram mem_search --query "something" --embeddings --limit 5`.
 
 **`mcp` options** (and env / config file):
 
@@ -291,7 +328,7 @@ When `embeddings.enabled` is `true` and the optional embedding stack is availabl
 await run({
   embeddings: {
     enabled: true,
-    similarityThreshold: 0.87,
+    similarityThreshold: 0.80,
     maxRetries: 3
   },
   search: {
@@ -320,6 +357,38 @@ mem_search({
 ```
 
 With embeddings enabled and vectors ready, results combine literal matches (FTS) and semantic similarity (e.g. paraphrases).
+
+### Example: indexing and search (embedding effectiveness)
+
+To see the difference between **FTS-only** and **semantic** search in one run, run the demo script (uses a temp dir; first run may download the embedding model):
+
+```bash
+node examples/embedding-demo.js
+# or
+npm run example:embedding
+```
+
+The script:
+
+1. **Indexes** three short documents (e.g. “memoria en Markdown”, “índice derivado”, “persistencia de sesión”).
+2. **Processes the embedding queue** so each document gets a vector.
+3. **Runs FTS search** for a query that does *not* appear literally in the text (e.g. “dónde se almacena la memoria del agente”) — FTS returns nothing.
+4. **Runs semantic (vector) search** for the same query — returns the relevant document by meaning.
+
+Example output:
+
+```text
+--- 3. FTS search (text only) ---
+  Query: "where is the agent memory stored"
+  (FTS finds no literal match; these words are not in the documents.)
+
+--- 4. Semantic search (embeddings) ---
+  Query: "where is the agent memory stored"
+  - [Session persistence] similarity=0.856
+    Persist the session context across agent restarts. The important state...
+```
+
+So: **FTS** only matches when the query words appear in the document; **embeddings** can retrieve documents that share the same meaning without sharing the same words.
 
 ---
 
