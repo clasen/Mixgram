@@ -1,0 +1,13 @@
+diff --git a/package.json b/package.json
+index 0c0d009888ec50a444c930c31da0b57160739591..9dbf4c35e01e2855f2f30b573288e61bedf0ae07 100644
+--- a/package.json
++++ b/package.json
+@@ -93,7 +93,7 @@
+   ],
+   "scripts": {
+     "build": "node install/build.js",
+-    "install": "node install/check.js || npm run build",
++    "install": "SHARP_IGNORE_GLOBAL_LIBVIPS=true node install/check.js || npm run build",
+     "clean": "rm -rf src/build/ .nyc_output/ coverage/ test/fixtures/output.*",
+     "test": "npm run lint && npm run test-unit",
+     "lint": "npm run lint-cpp && npm run lint-js && npm run lint-types",
