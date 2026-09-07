@@ -1,6 +1,6 @@
 {
   "name": "mixgram",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "description": "MCP memory server with Markdown source of truth and SQLite FTS5.",
   "keywords": [
     "mcp",
