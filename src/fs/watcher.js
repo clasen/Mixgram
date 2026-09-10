@@ -1,55 +1,22 @@
-import path from 'path';
 import chokidar from 'chokidar';
-import fs from 'fs';
+import { getDb } from '../db/sqlite.js';
 import { indexDocument, removeDocumentFromIndex } from '../core/indexing/indexer.js';
-import { getDocumentIdByPath, getDocumentMetaByPath } from '../core/indexing/reindex.js';
 
-/**
- * Start watching home (cross-project) and project memory root (repo-local) for .md changes.
- * On add/change: index the file (using DB metadata when path already known). On unlink: remove from index by path.
- * @param {object} config - resolved config
- * @returns {import('chokidar').FSWatcher} watcher instance (call .close() to stop)
- */
-function startWatcher(config) {
-  const homeRoot = config.homeMemoryRoot;
-  const projectRoot = config.projectMemoryRoot;
-  const patterns = [];
-  if (homeRoot) patterns.push(path.join(homeRoot, '**/*.md'));
-  if (projectRoot) patterns.push(path.join(projectRoot, '**/*.md'));
-  if (patterns.length === 0) return null;
-
-  const watcher = chokidar.watch(patterns, {
+export function startWatcher(config, onError = error => process.stderr.write(`[mixgram] watch: ${error.message}\n`)) {
+  const watcher = chokidar.watch(Object.values(config.collections), {
     ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 200 }
+    awaitWriteFinish: { stabilityThreshold: config.indexing.watchStabilityMs }
   });
-
-  watcher
-    .on('add', (filePath) => {
-      try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        const stat = fs.statSync(filePath);
-        const dbMeta = getDocumentMetaByPath(config, filePath);
-        const fileCreatedAt = stat.birthtime && !Number.isNaN(stat.birthtime.getTime()) ? stat.birthtime.toISOString() : undefined;
-        indexDocument(config, filePath, raw, stat.mtimeMs, { overrideFrontmatter: dbMeta ?? undefined, fileCreatedAt });
-      } catch (_) {}
-    })
-    .on('change', (filePath) => {
-      try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        const stat = fs.statSync(filePath);
-        const dbMeta = getDocumentMetaByPath(config, filePath);
-        const fileCreatedAt = stat.birthtime && !Number.isNaN(stat.birthtime.getTime()) ? stat.birthtime.toISOString() : undefined;
-        indexDocument(config, filePath, raw, stat.mtimeMs, { overrideFrontmatter: dbMeta ?? undefined, fileCreatedAt });
-      } catch (_) {}
-    })
-    .on('unlink', (filePath) => {
-      try {
-        const id = getDocumentIdByPath(config, filePath);
-        if (id) removeDocumentFromIndex(config, id);
-      } catch (_) {}
-    });
-
+  const update = filePath => {
+    if (!filePath.endsWith('.md')) return;
+    try { indexDocument(config, filePath); }
+    catch (error) { onError(error); }
+  };
+  watcher.on('add', update).on('change', update).on('unlink', filePath => {
+    try {
+      const row = getDb(config).prepare('SELECT id FROM documents WHERE path = ?').get(filePath);
+      if (row) removeDocumentFromIndex(config, row.id);
+    } catch (error) { onError(error); }
+  }).on('error', onError);
   return watcher;
 }
-
-export { startWatcher };

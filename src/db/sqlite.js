@@ -1,39 +1,29 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-let dbInstance = null;
+const databases = new WeakMap();
 
 export function getDb(config) {
-  if (dbInstance) return dbInstance;
-  const dbPath = config.sqlitePath;
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  dbInstance = new Database(dbPath);
-  dbInstance.pragma('journal_mode = WAL');
-  runMigrations(dbInstance);
-  return dbInstance;
-}
-
-function runMigrations(db) {
-  const migrationsDir = path.join(__dirname, 'migrations');
-  const files = fs.readdirSync(migrationsDir).filter(f => f.endsWith('.sql')).sort();
-  for (const file of files) {
-    const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-    db.exec(sql);
+  if (databases.has(config)) return databases.get(config);
+  fs.mkdirSync(path.dirname(config.sqlitePath), { recursive: true });
+  const db = new Database(config.sqlitePath);
+  try {
+    const existing = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='documents'").get();
+    if (existing && !db.prepare('PRAGMA table_info(documents)').all().some(c => c.name === 'collection')) {
+      throw new Error('Legacy database: Mixgram 2 requires a new SQLite path');
+    }
+    db.pragma('journal_mode = WAL');
+    db.exec(fs.readFileSync(new URL('./migrations/001_initial.sql', import.meta.url), 'utf8'));
+    databases.set(config, db);
+    return db;
+  } catch (error) {
+    db.close();
+    throw error;
   }
 }
 
-export function closeDb() {
-  if (dbInstance) {
-    dbInstance.close();
-    dbInstance = null;
-  }
+export function closeDb(config) {
+  databases.get(config)?.close();
+  databases.delete(config);
 }
-
-export { runMigrations };

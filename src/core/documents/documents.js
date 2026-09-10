@@ -1,240 +1,78 @@
 import fs from 'fs';
-import { documentPath, ensureDir } from '../../fs/paths.js';
-import { toMarkdown, parse } from '../../utils/markdown.js';
-import { observationId } from '../../utils/ids.js';
-import { contentHash } from '../../utils/hash.js';
-import { indexDocument, removeDocumentFromIndex } from '../indexing/indexer.js';
+import path from 'path';
+import { randomUUID } from 'crypto';
+import { documentPath } from '../../fs/paths.js';
+import { toMarkdown } from '../../utils/markdown.js';
+import { readDocument, indexDocument, removeDocumentFromIndex } from '../indexing/indexer.js';
 import { getDb } from '../../db/sqlite.js';
 
-/** Load document metadata from DB (canonical source). Returns null if not found or file missing. */
-function getDocumentMetaById(config, id) {
+function resolveDocument(config, id, includeDeleted = false) {
+  const row = getDb(config).prepare('SELECT path FROM documents WHERE id = ?').get(id);
+  if (!row) throw new Error('Document not found');
+  const doc = readDocument(config, row.path);
+  if (doc.metadata.id !== id) throw new Error('Document identity changed; reindex required');
+  if (!includeDeleted && doc.metadata.deleted_at) throw new Error('Document not found');
+  return doc;
+}
+
+function persist(config, doc, created) {
+  fs.mkdirSync(path.dirname(doc.path), { recursive: true });
+  const temp = `${doc.path}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temp, toMarkdown(doc.metadata, doc.body), { encoding: 'utf8', flag: 'wx' });
+    fs.renameSync(temp, doc.path);
+  } finally {
+    if (fs.existsSync(temp)) fs.unlinkSync(temp);
+  }
+  const result = { id: doc.metadata.id, path: doc.path, created, saved: true, indexed: true };
+  try { indexDocument(config, doc.path); }
+  catch (error) { result.indexed = false; result.error = error.message; }
+  return result;
+}
+
+export function saveDocument(config, payload) {
   const db = getDb(config);
-  const row = db.prepare(
-    'SELECT id, path, title, type, scope, project, topic_key, session_id, tool_name, created_at, updated_at, revision_count, duplicate_count, deleted_at, embedding_status FROM documents WHERE id = ? AND deleted_at IS NULL'
-  ).get(id);
-  if (!row) return null;
-  if (!fs.existsSync(row.path)) return null;
-  const tagRows = db.prepare('SELECT tag FROM document_tags WHERE document_id = ?').all(id);
-  const tags = tagRows.map((r) => r.tag);
-  const raw = fs.readFileSync(row.path, 'utf8');
-  const { body } = parse(raw);
-  return { path: row.path, frontmatter: rowToFrontmatter(row, tags), body };
-}
-
-/** Load document metadata by topic_key + scope + project. */
-function getDocumentMetaByTopicKey(config, topic_key, scope, project) {
-  const db = getDb(config);
-  const row = db.prepare(
-    'SELECT id, path, title, type, scope, project, topic_key, session_id, tool_name, created_at, updated_at, revision_count, duplicate_count, deleted_at, embedding_status FROM documents WHERE topic_key = ? AND scope = ? AND (project = ? OR (project IS NULL AND ? IS NULL)) AND deleted_at IS NULL'
-  ).get(topic_key, scope, project ?? null, project ?? null);
-  if (!row) return null;
-  if (!fs.existsSync(row.path)) return null;
-  const tagRows = db.prepare('SELECT tag FROM document_tags WHERE document_id = ?').all(row.id);
-  const tags = tagRows.map((r) => r.tag);
-  const raw = fs.readFileSync(row.path, 'utf8');
-  const { body } = parse(raw);
-  return { path: row.path, frontmatter: rowToFrontmatter(row, tags), body };
-}
-
-function rowToFrontmatter(row, tags = []) {
-  return {
-    id: row.id,
-    title: row.title ?? '',
-    type: row.type ?? 'generated_note',
-    scope: row.scope ?? 'project',
-    project: row.project ?? null,
-    topic_key: row.topic_key ?? null,
-    session_id: row.session_id ?? null,
-    tool_name: row.tool_name ?? null,
-    created_at: row.created_at,
-    updated_at: row.updated_at,
-    revision_count: row.revision_count ?? 1,
-    duplicate_count: row.duplicate_count ?? 0,
-    deleted: !!row.deleted_at,
-    tags: Array.isArray(tags) ? tags : [],
-    embedding_status: row.embedding_status ?? 'disabled',
-    deleted_at: row.deleted_at ?? null
-  };
-}
-
-/**
- * Resolve existing document by id (takes precedence) or by topic_key + scope + project.
- * Metadata comes from SQLite; body from disk.
- * @returns {{ path: string, frontmatter: object, body: string } | null}
- */
-function resolveDocument(config, { id, topic_key, scope, project }) {
-  if (id) return getDocumentMetaById(config, id);
-  if (topic_key != null && scope != null) return getDocumentMetaByTopicKey(config, topic_key, scope, project);
-  return null;
-}
-
-/**
- * Build frontmatter for a new or updated document.
- */
-function buildFrontmatter(overrides = {}, existing = null) {
+  const collection = payload.collection ?? config.defaultCollection;
+  if (!Object.hasOwn(config.collections, collection)) throw new Error('Unknown collection');
+  const row = !payload.id && payload.key ? db.prepare('SELECT id FROM documents WHERE collection = ? AND key = ? AND deleted_at IS NULL').get(collection, payload.key) : null;
+  const id = payload.id ?? row?.id;
+  const existing = id ? resolveDocument(config, id) : null;
+  if (existing && payload.collection && payload.collection !== existing.collection) throw new Error('Move the file between collection folders and reindex to change collection');
   const now = new Date().toISOString();
-  if (existing) {
-    const rev = (existing.revision_count ?? 1) + 1;
-    return {
-      ...existing,
-      ...overrides,
-      updated_at: now,
-      revision_count: rev,
-      id: existing.id
-    };
-  }
-  return {
-    id: overrides.id || observationId(),
-    title: overrides.title ?? '',
-    type: overrides.type ?? 'generated_note',
-    scope: overrides.scope ?? 'project',
-    project: overrides.project ?? null,
-    topic_key: overrides.topic_key ?? null,
-    session_id: overrides.session_id ?? null,
-    tool_name: overrides.tool_name ?? null,
-    created_at: overrides.created_at ?? now,
-    updated_at: now,
-    revision_count: 1,
-    duplicate_count: 0,
-    deleted: false,
-    tags: Array.isArray(overrides.tags) ? overrides.tags : [],
-    embedding_status: 'disabled'
+  const metadata = existing ? { ...existing.metadata } : {
+    id: randomUUID(), title: '', type: 'note', key: null, tags: [], created_at: now, deleted_at: null
   };
-}
-
-/**
- * Save or update a memory document (mem_save semantics).
- * Resolution: 1) by id, 2) by topic_key in scope, 3) create new.
- * @returns {{ id: string, path: string, created: boolean }}
- */
-function saveDocument(config, payload) {
-  const { title, type, scope, project, topic_key, content, session_id, id: givenId, tags } = payload;
-  const resolved = givenId
-    ? resolveDocument(config, { id: givenId })
-    : topic_key != null && scope != null
-      ? resolveDocument(config, { topic_key, scope, project })
-      : null;
-
-  let docPath;
-  let frontmatter;
-  let body = typeof content === 'string' ? content : (content && content.text) || '';
-
-  if (resolved) {
-    docPath = resolved.path;
-    frontmatter = buildFrontmatter(
-      { title, type, scope, project, topic_key, session_id, tags },
-      { ...resolved.frontmatter, revision_count: resolved.frontmatter.revision_count ?? 1 }
-    );
-    body = body || resolved.body;
-  } else {
-    frontmatter = buildFrontmatter({
-      id: givenId || observationId(),
-      title,
-      type: type || 'generated_note',
-      scope: scope || 'project',
-      project: project || null,
-      topic_key: topic_key || null,
-      session_id: session_id || null,
-      tool_name: 'mem_save',
-      tags: tags || []
-    });
-    docPath = documentPath(config, frontmatter);
-    ensureDir(docPath);
+  for (const key of ['title', 'type', 'key', 'tags']) {
+    if (payload[key] !== undefined) metadata[key] = payload[key];
   }
-
-  const raw = toMarkdown(frontmatter, body);
-  fs.writeFileSync(docPath, raw, 'utf8');
-  const stats = fs.statSync(docPath);
-  indexDocument(config, docPath, raw, stats.mtimeMs, { overrideFrontmatter: frontmatter });
-  return {
-    id: frontmatter.id,
-    path: docPath,
-    created: !resolved
-  };
-}
-
-/**
- * Update document by id (mem_update semantics).
- * @returns {{ id: string } | null}
- */
-function updateDocument(config, { id, title, content, tags }) {
-  const resolved = resolveDocument(config, { id });
-  if (!resolved) return null;
-  const body = typeof content === 'string' ? content : (content && content.text) || resolved.body;
-  const frontmatter = buildFrontmatter(
-    { title: title ?? resolved.frontmatter.title, tags },
-    resolved.frontmatter
-  );
-  const raw = toMarkdown(frontmatter, body);
-  fs.writeFileSync(resolved.path, raw, 'utf8');
-  const stats = fs.statSync(resolved.path);
-  indexDocument(config, resolved.path, raw, stats.mtimeMs, { overrideFrontmatter: frontmatter });
-  return { id: frontmatter.id };
-}
-
-/**
- * Soft or hard delete (mem_delete semantics).
- * @param {{ hardDelete?: boolean }} options
- * @returns {boolean} true if document existed and was handled
- */
-function deleteDocument(config, documentId, options = {}) {
-  const resolved = resolveDocument(config, { id: documentId });
-  if (!resolved) return false;
-  if (options.hardDelete) {
-    try { fs.unlinkSync(resolved.path); } catch (_) {}
-    removeDocumentFromIndex(config, documentId);
-  } else {
-    const now = new Date().toISOString();
-    const frontmatter = { ...resolved.frontmatter, deleted_at: now, deleted: true };
-    const raw = toMarkdown(frontmatter, resolved.body);
-    fs.writeFileSync(resolved.path, raw, 'utf8');
-    const db = getDb(config);
-    db.prepare('UPDATE documents SET deleted_at = ? WHERE id = ?').run(now, documentId);
-    const ftsRowids = db.prepare('SELECT rowid FROM document_fts WHERE document_id = ?').all(documentId);
-    for (const { rowid } of ftsRowids) {
-      db.prepare('DELETE FROM document_fts WHERE rowid = ?').run(rowid);
-    }
+  metadata.tags = [...new Set(metadata.tags)];
+  metadata.updated_at = now;
+  const actualCollection = existing?.collection ?? collection;
+  if (metadata.key) {
+    const conflict = db.prepare('SELECT id FROM documents WHERE collection = ? AND key = ? AND id != ? AND deleted_at IS NULL').get(actualCollection, metadata.key, metadata.id);
+    if (conflict) throw new Error('Key already belongs to another document in this collection');
   }
-  return true;
+  const doc = { metadata, body: payload.content ?? existing?.body ?? '',
+    path: existing?.path ?? documentPath(config, { collection: actualCollection, ...metadata }) };
+  if (!existing && fs.existsSync(doc.path)) throw new Error('Document path already exists');
+  return persist(config, doc, !existing);
 }
 
-/**
- * Get full document content by id (mem_get_observation).
- * @returns {{ id: string, title: string, type: string, scope: string, project: string | null, topic_key: string | null, content: string } | null}
- */
-function getObservation(config, documentId) {
-  const resolved = resolveDocument(config, { id: documentId });
-  if (!resolved) return null;
-  const fullContent = toMarkdown(resolved.frontmatter, resolved.body);
-  return {
-    id: resolved.frontmatter.id,
-    title: resolved.frontmatter.title,
-    type: resolved.frontmatter.type,
-    scope: resolved.frontmatter.scope,
-    project: resolved.frontmatter.project ?? null,
-    topic_key: resolved.frontmatter.topic_key ?? null,
-    session_id: resolved.frontmatter.session_id ?? null,
-    content: fullContent
-  };
+export function getDocument(config, id) {
+  const doc = resolveDocument(config, id);
+  return { ...doc.metadata, collection: doc.collection, content: doc.body };
 }
 
-/**
- * List document ids in a session ordered by updated_at (for mem_timeline).
- */
-function getObservationsBySession(config, sessionId) {
-  const db = getDb(config);
-  const rows = db.prepare(
-    'SELECT id FROM documents WHERE session_id = ? AND deleted_at IS NULL ORDER BY updated_at ASC'
-  ).all(sessionId);
-  return rows.map((r) => r.id);
+export function deleteDocument(config, id, { hardDelete = false } = {}) {
+  const doc = resolveDocument(config, id, true);
+  if (hardDelete) {
+    fs.unlinkSync(doc.path);
+    try { removeDocumentFromIndex(config, id); }
+    catch (error) { return { id, deleted: true, indexed: false, error: error.message }; }
+    return { id, deleted: true, indexed: true };
+  }
+  const now = new Date().toISOString();
+  doc.metadata.deleted_at = now;
+  doc.metadata.updated_at = now;
+  return { ...persist(config, doc, false), deleted: true };
 }
-
-export {
-  resolveDocument,
-  buildFrontmatter,
-  saveDocument,
-  updateDocument,
-  deleteDocument,
-  getObservation,
-  getObservationsBySession
-};

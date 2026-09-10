@@ -1,406 +1,129 @@
-# Mixgram
+# Mixgram 2
 
-MCP memory server compatible with [Engram](https://github.com/gentleman-programming/engram): **Markdown as source of truth**, SQLite FTS5 for full-text search. Optional local embeddings when you need hybrid search.
+General-purpose memory for notes, documentation, research and agent knowledge. Markdown files are the source of truth; SQLite FTS5 and optional local embeddings provide search. Collections map names to folders, and tags classify documents across collections.
 
-- **Human-readable memory** — All durable memory is stored as Markdown files.
-- **Git-friendly** — Edit files by hand and reindex; the index is derived and rebuildable.
-- **Engram-compatible** — Same MCP tool names and semantics; drop-in replacement.
+Version 2 uses a new API and fresh storage under `~/.mixgram/v2/`. It does not migrate version 1 data or expose Engram compatibility tools. Do not point it at an existing version 1 memory folder; legacy SQLite databases are rejected.
 
-### Advantages over Engram
-
-- **Visible, editable docs** — As you advance with agentic development you see the actual documentation files on disk. You can open them, read them, and edit them manually; the agent’s memory is not hidden in a black box.
-- **Versioned** — Memory lives in Markdown under your repo (e.g. `docs/<type>/` by default for project scope) or in a shared home (e.g. `home/memory/` for cross-project). Commit, branch, and diff as with any other docs.
-- **No semantic deps required** — Core experience is text-only (FTS5). No need to install embeddings or vector libs unless you opt in.
-
----
-
-## Installation
-
-**Global install (recommended for MCP clients):**
+## Install and run
 
 ```bash
 npm install -g mixgram
+mixgram mcp
 ```
 
-Then use the `mixgram` command in your client config (see below). No extra dependencies for core (text-only) memory; embeddings are optional.
-
----
-
-## CLI
-
-| Command | Description |
-|--------|-------------|
-| `mixgram mcp [options]` | Run the MCP server (stdio). This is what your client runs. |
-| `mixgram setup cursor` | Add Mixgram to Cursor’s MCP config. |
-| `mixgram setup gemini-cli` | Add Mixgram to Gemini CLI settings. |
-| `mixgram setup codex` | Add Mixgram to Codex config. |
-| `mixgram help` | Show usage. |
-| `mixgram help <tool>` | Show options for a specific MCP tool. |
-| `mixgram <tool> [--key value ...]` | Run any MCP tool from the command line (see below). |
-
-**MCP tools from the CLI** — Every MCP tool is automatically available as a subcommand. No extra wiring is needed: if a tool is added to the internal registry, it is exposed both to MCP clients and to the CLI. Use `mixgram help` to list tools and `mixgram help <tool>` (or `mixgram <tool> --help`) to see a tool’s options.
-
-### Command-line examples
-
-```bash
-# Stats and health
-mixgram mem_stats
-mixgram mem_stats --embeddings   # enable embeddings for this run (or use env/config, see below)
-
-# Save a note
-mixgram mem_save --title "My note" --content "Search" --type decision --project my-app
-mixgram mem_save --title "Other note" --content "Model Context Protocol" --type architecture
-
-# Search (default: merged scope, limit 10)
-mixgram mem_search --query "index"
-mixgram mem_search --query "index" --limit 5
-mixgram mem_search --query "indexing" --scope-mode project-only --project my-app
-
-# OR-style query: use FTS5 keyword OR (and optional quoted phrases)
-mixgram mem_search --query 'mcp OR "model context protocol"' --limit 10
-mixgram mem_search --query 'cursor OR "model context protocol"' --limit 5
-
-# Reindex from disk (e.g. after editing Markdown by hand)
-mixgram mem_reindex --full
-
-# Context (recent or by query)
-mixgram mem_context --query "indexing decisions" --project my-app --limit 5
-mixgram mem_context --limit 5
-```
-
-**Example: index and find by embedding (not FTS)** — Save a note with one wording, then search with different words that mean the same. FTS finds nothing; semantic search returns the doc:
-
-```bash
-# 1. Index a document (content about storing memory)
-mixgram mem_save --title "Where we store memory" --content "We keep agent memory in Markdown under docs/." --type decision --project demo --embeddings
-
-# 2. Search by meaning: query has no literal overlap with the text
-mixgram mem_search --query "where is the agent memory stored" --project demo --embeddings --limit 5
-```
-
-The first run embeds the document (worker runs in-process and processes the queue after save; the first time can take a few seconds while the embedding model loads). The second run uses the embedding worker to turn the query into a vector and returns the document by similarity. You can also use `npm run example:embedding` for a self-contained demo in a temp dir.
-
-**Query syntax (FTS5):** Search uses SQLite FTS5. You can use the operators `OR`, `AND`, `NOT` and quoted phrases. For an OR-style search (e.g. “mcp” or “model context protocol”), use the word `OR` in the query, not the pipe character: `--query 'mcp OR "model context protocol"'`. Unquoted terms are ANDed by default; use `OR` explicitly to match any of several terms.
-
-Arguments are passed as `--key value`. Booleans use `--flag` or `--no-flag`. Arrays use repeated flags: `--tags a --tags b`.
-
-**Enabling embeddings from the CLI:** For the MCP server use `mixgram mcp --embeddings`. For one-off tool runs (e.g. `mixgram mem_stats`, `mixgram mem_search`) you can pass `--embeddings` after the tool name, set the env var `MIXGRAM_EMBEDDINGS_ENABLED=1` (or `true`), or enable in `.mixgram/config.json` with `"embeddings": { "enabled": true }`. Example: `mixgram mem_search --query "something" --embeddings --limit 5`.
-
-**`mcp` options** (and env / config file):
-
-| Option | Env | Description |
-|--------|-----|-------------|
-| `--config <path>` | `MIXGRAM_CONFIG` | Config file (default: `./.mixgram/config.json` or `~/.mixgram/config.json`). |
-| `--embeddings` | `MIXGRAM_EMBEDDINGS_ENABLED` | Enable optional semantic (hybrid) search. |
-| `--watch` | `MIXGRAM_WATCH` | Watch files and reindex on change. |
-| `--home <path>` | `MIXGRAM_HOME` | Home memory root (cross-project). |
-| `--project-memory <path>` | `MIXGRAM_PROJECT_MEMORY` | Project memory root (default: `./docs`, relative to repo). |
-| `--projects <path>` | `MIXGRAM_PROJECTS` | Projects root (legacy). |
-| `--sqlite-path <path>` | `MIXGRAM_SQLITE_PATH` | SQLite index path. |
-
-**Example — Cursor**
-
-Create `.cursor/mcp.json` in your repo (recommended, and required for Cursor Cloud Agents) or add the same config to `~/.cursor/mcp.json` (or run `mixgram setup cursor`):
+Client configuration:
 
 ```json
 {
   "mcpServers": {
-    "mixgram": {
-      "command": "mixgram",
-      "args": ["mcp", "--project-memory", "${workspaceFolder}/docs"]
-    }
+    "mixgram": { "command": "mixgram", "args": ["mcp"] }
   }
 }
 ```
 
-With embeddings and custom paths:
+`mixgram setup cursor`, `mixgram setup gemini-cli` and `mixgram setup codex` register that command in the corresponding client config. `mixgram help` lists commands; `mixgram help mem_save` describes a tool's arguments.
 
-```json
-"mixgram": {
-  "command": "mixgram",
-  "args": ["mcp", "--project-memory", "${workspaceFolder}/docs", "--embeddings", "--home", "/data/memory"]
-}
-```
+## Six tools
 
-Restart Cursor after changing config.
+| Tool | Arguments | Result |
+|---|---|---|
+| `mem_save` | Optional `id`, `collection`, `title`, `content`, `type`, `key`, `tags` | `id`, `path`, `created`, `saved`, `indexed` |
+| `mem_search` | Optional `query`, `collection`, `type`, `tags`, `limit`, `offset` | `results`, `mode`, `degraded`, optional `reason` |
+| `mem_get` | `id` | Metadata fields and separate `content` |
+| `mem_delete` | `id`, optional `hardDelete` | Deletion and indexing status |
+| `mem_stats` | None | Document counts, index location and embedding job status |
+| `mem_reindex` | Optional `full` | `scanned`, `indexed`, `skipped`, `removed`, `errors` |
 
----
+All tools are available through MCP and the CLI with the same validation. Invalid or unknown arguments produce errors. CLI failures return a nonzero exit code. MCP failures set `isError`. Tool responses contain JSON; protocol validation failures may contain SDK error text.
 
-## Quick start
-
-Run the MCP server (stdio):
+### Saving and updating
 
 ```bash
-mixgram mcp
+mixgram mem_save --title "Sourdough notes" --content "Feed the starter daily." --type recipe --tags baking
+mixgram mem_save --collection research --key climate/method --title "Method" --content "Study notes"
+mixgram mem_save --id DOCUMENT_ID --title "Revised title"
+mixgram mem_save --id DOCUMENT_ID --content '' --no-tags
 ```
 
-From the repo without global install: `npx mixgram mcp` or `npm start`. Configure your MCP client with `command: "mixgram"`, `args: ["mcp"]` when Mixgram is installed globally.
+With `id`, update an existing live document; an unknown ID is an error. Without `id`, an explicit `key` upserts within the selected collection. Without either, create a new document even if its title matches another note. No key is automatically inferred from a title.
 
----
+Omitted fields are preserved on updates. `content: ""` and `tags: []` clear those fields; `key: null` removes a key. CLI equivalents are `--content ''`, `--no-tags` and `--no-key`. Repeat `--tags value` to supply multiple tags. Defaults for new documents are empty title/content/tags, type `note`, and no key. Types are arbitrary nonempty strings.
+
+New files use `<title-slug>-<id>.md`; updating a title retains the path. Collection changes are made by moving the file to another configured collection folder and reindexing. Updating an ID with a different collection is rejected.
+
+Prompts and conversation summaries are ordinary documents. For example, use type `prompt` or `summary` and tag `conversation:123` to group a conversation.
+
+### Search and listing
+
+```bash
+mixgram mem_search --query 'climate OR temperature' --collection research
+mixgram mem_search --tags baking --type recipe --limit 5 --offset 0
+mixgram mem_get --id DOCUMENT_ID
+```
+
+Without `query` (or with blank text), list recent documents by update time. With a query, use FTS5 syntax: quoted phrases and uppercase `AND`, `OR`, `NOT` are supported. Invalid FTS expressions return an error. Omit `collection` to search all configured collections. Every supplied tag must match. `limit` defaults to 10 and may not exceed `search.maxLimit` (100 by default); `offset` defaults to zero.
+
+Results contain `id`, title, collection, type, key, tags, timestamps and a bounded snippet. Ranked results also contain a score. Read full content using `mem_get`.
+
+When embeddings are enabled, ranks are fused using `weight / (fusionConstant + rank)`, then deduplicated and paginated. Text and semantic searches share collection/type/tag filters. Semantic search uses exact cosine distance over eligible vectors, so filtering cannot lose matches behind a global candidate limit. This favors correctness for a local memory corpus; vector retrieval and rank fusion scale with the matching corpus size.
+
+Embeddings are optional at runtime. Model and native vector packages remain installed dependencies. The model runs in a child process; saves queue work and do not wait for model inference. Keep `mixgram mcp --embeddings` running to process queued documents, including saves made by one-off CLI commands. A one-off command does not wait for its entire embedding queue to drain. If the worker or vector store fails, search returns textual results with `degraded: true` and a reason. A healthy worker with no completed vectors yet may return only text matches in hybrid mode.
+
+### Persistence and rebuilding
+
+Frontmatter stores `id`, `title`, `type`, `key`, `tags`, `created_at`, `updated_at` and nullable `deleted_at`. Dates use UTC ISO 8601 strings. The body preserves its content, including empty content. Collection is derived from the configured root containing the file.
+
+```bash
+mixgram mem_reindex
+mixgram mem_reindex --full
+mixgram mem_delete --id DOCUMENT_ID
+mixgram mem_delete --id DOCUMENT_ID --hardDelete
+```
+
+Save writes a temporary file and renames it before updating SQLite. If indexing fails afterwards, the response explicitly reports `saved: true`, `indexed: false`, and an error; the file is durable and reindexing repairs the index. Soft deletion persists `deleted_at` in Markdown and survives rebuilding; hard deletion removes the file, including a previously soft-deleted file.
+
+Incremental reindexing compares file content hashes. Full reindexing reconstructs the text index from the configured folders. Both report errors per file. Metadata edited in Markdown takes precedence over SQLite. Plain Markdown without frontmatter is indexed using its first heading, file timestamps and a path-derived ID; to retain identity across moves, give the file an explicit `id` in frontmatter. Duplicate IDs, conflicting live keys and invalid metadata are reported as errors.
+
+The watcher handles Markdown additions, changes and removals. Files outside configured roots, including symlinks pointing outside, are rejected. If the OS cannot provide native watches, Chokidar's `CHOKIDAR_USEPOLLING=1` environment setting selects polling.
 
 ## Configuration
 
-When you run `mixgram mcp`, config is merged from (lowest to highest priority):
+Load order: defaults, config file, environment, CLI flags. Nested options merge; an explicitly supplied `collections` map replaces the default collection map. Relative config paths resolve from the config file's directory.
 
-1. **Defaults** (paths relative to current directory)
-2. **Config file** — `./.mixgram/config.json` (project) or `~/.mixgram/config.json` (user), or `--config /path`
-3. **Environment** — `MIXGRAM_*` (see table above)
-4. **CLI args** — `--embeddings`, `--home`, etc.
-
-Example **`.mixgram/config.json`** (project or home):
+Default config locations are `./.mixgram/v2/config.json`, then `~/.mixgram/v2/config.json`. Select another file with `--config` or `MIXGRAM_CONFIG`. Version 1 config files are not loaded automatically.
 
 ```json
 {
-  "homeMemoryRoot": "~/.mixgram/docs",
-  "projectMemoryRoot": "./docs",
-  "sqlitePath": "~/.mixgram/index.db",
-  "embeddings": {
-    "enabled": true
-  }
-}
-```
-
-Paths in the config file are relative to the config file’s directory (project) or to the current directory when using `~/.mixgram/config.json`. **Project memory** is resolved relative to the current working directory (repo) when you use a global config, so docs stay in the repo. The project memory folder name is configurable: set `projectMemoryRoot` to e.g. `./specs` to get `specs/architecture/`, `specs/decisions/`, etc. Defaults:
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `homeMemoryRoot` | `~/.mixgram/docs` | Cross-project memory (Markdown files). |
-| `projectMemoryRoot` | `./docs` | Project memory in the current repo (e.g. `docs/architecture/`, `docs/decisions/`). You can use another folder name, e.g. `./specs` for `specs/architecture/`. |
-| `sqlitePath` | `~/.mixgram/index.db` | SQLite index (FTS5 + optional vectors). |
-| `watch` | `true` | Watch files and reindex on change. |
-| `indexing.reindexOnStartup` | `true` | Full reindex when server starts. |
-| `embeddings.enabled` | `false` | Enable async local embeddings and hybrid search. |
-| `search.defaultScopeMode` | `'merged'` | `'project-only'` \| `'home-only'` \| `'merged'`. |
-| `search.ftsWeight` / `search.semanticWeight` | `0.7` / `0.3` | Weights when embeddings are enabled. |
-
-Example minimal override:
-
-```js
-import { run } from 'mixgram/src/mcp/server.js';
-
-await run({
-  homeMemoryRoot: '/data/memory',
-  projectMemoryRoot: '/path/to/repo/docs',
-  sqlitePath: '/data/.mixgram/index.db',
-  watch: true
-});
-```
-
----
-
-## Text-only memory
-
-Core flow: save Markdown-backed documents, search with FTS5, get context.
-
-### Save (create or update by topic)
-
-```json
-// mem_save — create or update by topic_key
-{
-  "title": "Use SQLite as derived index",
-  "type": "decision",
-  "scope": "project",
-  "project": "my-app",
-  "topic_key": "architecture/sqlite-derived-index",
-  "content": "SQLite will be the derived index over Markdown documents."
-}
-```
-
-- **scope** `project` → file under `<repo>/docs/<type>/...` (e.g. `docs/architecture/`, `docs/decisions/`).
-- **scope** `home` → file under `home/memory/...` (cross-project).
-- Same `topic_key` + scope + project → **update** existing doc; otherwise create.
-
-### Search
-
-```json
-// mem_search
-{
-  "query": "derived SQLite index",
-  "scope_mode": "merged",
-  "project": "my-app",
-  "limit": 10
-}
-```
-
-**scope_mode:**
-
-- `project-only` — only project memory.
-- `home-only` — only home memory.
-- `merged` — both; project results ranked first when `project` is set.
-
-Response includes `documentId`, `chunkId`, `title`, `topicKey`, `snippet`, `score`, etc.
-
-### Context (for prompts)
-
-```json
-// mem_context — recent or query-based
-{
-  "query": "indexing decisions",
-  "project": "my-app",
-  "limit": 5
-}
-```
-
-Omit `query` or use `*` to get **recent** context only.
-
-### Get / update / delete
-
-- **mem_get_observation** `{ "id": "<document-id>" }` — full document content.
-- **mem_update** `{ "id": "<id>", "title": "...", "content": "..." }` — update by id.
-- **mem_delete** `{ "id": "<id>", "hardDelete": false }` — soft or hard delete.
-
-### Helpers
-
-- **mem_suggest_topic_key** — suggest a stable `topic_key` from title/content/type.
-- **mem_stats** — counts (documents, sessions, prompts, `embeddings_enabled`).
-
-### Example: one round-trip
-
-```text
-1. mem_save → { success: true, id: "<10-char id>", path: "...", created: true }
-2. mem_search({ query: "SQLite", project: "my-app" }) → { results: [ { title, snippet, ... } ] }
-3. mem_get_observation({ id: "<10-char id>" }) → { title, content, type, scope, project, ... }
-```
-
----
-
-## Reindex, watch, and sessions
-
-### Reindex from disk
-
-Useful after cloning a repo or editing Markdown by hand:
-
-```json
-// mem_reindex
-{ "full": true }
-```
-
-- `full: true` — rebuild entire index from `home/**/*.md` and `docs/**/*.md` (project memory in repo).
-- `full: false` (default) — incremental (by mtime).
-
-Manual edit example:
-
-1. Edit a `.md` file under `home/memory` or `docs/<type>/` in your repo.
-2. Call `mem_reindex({ full: true })` (or run with `watch: true` so changes are picked up).
-3. `mem_search` and `mem_get_observation` reflect the new content.
-
-### Watcher
-
-Start the server with `watch: true` so that add/change/delete under the memory paths trigger reindex automatically.
-
-### Sessions and prompts
-
-- **mem_session_start** `{ "project": "my-app" }` → `{ session_id }`
-- **mem_session_end** `{ "session_id": "..." }`
-- **mem_session_summary** `{ "session_id": "...", "content": "...", "title": "..." }` — persists a summary as a memory document.
-- **mem_save_prompt** `{ "session_id": "...", "content": "..." }` — store a prompt for the session.
-- **mem_timeline** `{ "observation_id": "..." }` — before/focus/after in the same session.
-
-### Scope examples
-
-```json
-// Only project memory
-mem_search({ "query": "reindex", "scope_mode": "project-only", "project": "my-app" })
-
-// Only home (cross-project)
-mem_search({ "query": "reindex", "scope_mode": "home-only" })
-
-// Both; project first
-mem_search({ "query": "reindex", "scope_mode": "merged", "project": "my-app" })
-```
-
----
-
-## Optional semantic layer
-
-When `embeddings.enabled` is `true` and the optional embedding stack is available:
-
-- **Saves** are durable and searchable by text immediately; embeddings are queued and processed in the background.
-- **Search** becomes **hybrid**: FTS + vector similarity, blended with `search.ftsWeight` and `search.semanticWeight` (e.g. 0.7 and 0.3).
-- A **worker** runs in a separate process and processes the embedding queue (e.g. every 2 seconds). Query embeddings for hybrid search are also computed in that process via IPC, so the main MCP server never loads `@huggingface/transformers` and is not affected by native/ONNX crashes in the embedding stack.
-
-### Enable embeddings
-
-1. Ensure optional deps are installed if your setup uses them (e.g. `@huggingface/transformers`, `sqlite-vec`).
-2. Configure:
-
-```js
-await run({
-  embeddings: {
-    enabled: true,
-    similarityThreshold: 0.80,
-    maxRetries: 3
+  "collections": {
+    "general": "./general",
+    "research": "./research"
   },
-  search: {
-    ftsWeight: 0.7,
-    semanticWeight: 0.3
-  }
-});
+  "defaultCollection": "general",
+  "sqlitePath": "./index.db",
+  "watch": true,
+  "embeddings": { "enabled": false }
+}
 ```
 
-### Behaviour
+Defaults: collection `general` at `~/.mixgram/v2/general`, index `~/.mixgram/v2/index.db`, watching and incremental startup synchronization enabled. Collection roots must not overlap, including through symlinks. `defaultCollection` must name a configured collection. Use a separate SQLite path for each distinct set of collections.
 
-- **mem_save** / **mem_update** return as soon as the Markdown is written and the text index is updated; they do **not** wait for embeddings.
-- **mem_search** uses FTS only until vectors exist for the matched chunks; then it uses the hybrid blend.
-- If the embedding provider or sqlite-vec is unavailable, save and search still work (text-only).
+Environment: `MIXGRAM_CONFIG`, `MIXGRAM_SQLITE_PATH`, `MIXGRAM_EMBEDDINGS_ENABLED`, `MIXGRAM_WATCH`. Boolean values accept `1`, `0`, `true`, `false`. CLI overrides: `--config`, `--sqlite-path`, `--embeddings` / `--no-embeddings`, `--watch` / `--no-watch`.
 
-### Example: hybrid search
+Operational defaults live in `src/config.js`. Search weights default to 0.7 text / 0.3 semantic with fusion constant 60. The default embedding model is `Xenova/multilingual-e5-large`, 1024 dimensions, q8. Model output dimensions must match configuration. Embedding jobs retry up to three times; abandoned processing jobs become eligible after the configured five-minute lease (`embeddings.jobLeaseMs`). No silent configuration fallback is applied to invalid inputs.
 
-```json
-// Same tool; behaviour depends on config and whether vectors exist
-mem_search({
-  "query": "persistir índices derivados",
-  "scope_mode": "merged",
-  "project": "my-app",
-  "limit": 5
-})
-```
+## Development
 
-With embeddings enabled and vectors ready, results combine literal matches (FTS) and semantic similarity (e.g. paraphrases).
-
-### Example: indexing and search (embedding effectiveness)
-
-To see the difference between **FTS-only** and **semantic** search in one run, run the demo script (uses a temp dir; first run may download the embedding model):
-
-```bash
-node examples/embedding-demo.js
-# or
-npm run example:embedding
-```
-
-The script:
-
-1. **Indexes** three short documents (e.g. “memoria en Markdown”, “índice derivado”, “persistencia de sesión”).
-2. **Processes the embedding queue** so each document gets a vector.
-3. **Runs FTS search** for a query that does *not* appear literally in the text (e.g. “dónde se almacena la memoria del agente”) — FTS returns nothing.
-4. **Runs semantic (vector) search** for the same query — returns the relevant document by meaning.
-
-Example output:
-
-```text
---- 3. FTS search (text only) ---
-  Query: "where is the agent memory stored"
-  (FTS finds no literal match; these words are not in the documents.)
-
---- 4. Semantic search (embeddings) ---
-  Query: "where is the agent memory stored"
-  - [Session persistence] similarity=0.856
-    Persist the session context across agent restarts. The important state...
-```
-
-So: **FTS** only matches when the query words appear in the document; **embeddings** can retrieve documents that share the same meaning without sharing the same words.
-
----
-
-## Tests
+Node.js with ESM; package manager `pnpm@11.3.0`. No build step is required.
 
 ```bash
 npm test
+npm run test:large
+npm run quality
+npm run bench:indexing
+npm run bench:search
 ```
 
-Runs black-box scenario tests for text-only memory, reindex/sessions/scope, and semantic fallback and error handling. Use `npm run test:visual` to see a narrative per scenario (inputs, outputs, snippets, and checks) for human review.
-
----
+Tests use temporary folders and SQLite databases. Semantic ranking tests use real sqlite-vec distance calculations with deterministic vectors, without downloading a model. Optional model-backed runs: `npm run example:embedding`, `npm run bench:embed`, `npm run bench:search:embed`; these may download the model on first run.
 
 ## License
 

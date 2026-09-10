@@ -1,12 +1,11 @@
 {
   "name": "mixgram",
-  "version": "1.3.7",
-  "description": "MCP memory server with Markdown source of truth and SQLite FTS5.",
+  "version": "2.0.0",
+  "description": "General-purpose Markdown memory with collections, tags, text and semantic search over MCP and CLI.",
   "keywords": [
     "mcp",
     "model-context-protocol",
     "memory",
-    "engram",
     "markdown",
     "sqlite",
     "fts5",

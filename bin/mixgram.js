@@ -6,11 +6,11 @@
  *   mixgram setup <client>   — add Mixgram to Cursor / Gemini CLI / Codex config
  */
 import { run, startEmbeddingWorker } from '../src/mcp/server.js';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, mergeConfig } from '../src/config.js';
 import { closeDb } from '../src/db/sqlite.js';
 import { createToolHandlers } from '../src/mcp/tools.js';
 import { getToolByName, listToolNames, parseToolArgs, formatToolHelp } from '../src/mcp/cli-adapter.js';
-import { processNextJob, enqueueChunks } from '../src/core/embeddings/queue.js';
+import { reindex } from '../src/core/indexing/reindex.js';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -22,83 +22,33 @@ const PKG = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'
 const SUBCOMMAND = process.argv[2];
 const ARG = process.argv[3];
 
-/** Parse options after "mcp": --config, --embeddings, --watch, --home, --sqlite-path */
-function parseMcpArgs() {
-  const args = process.argv.slice(3);
-  const out = {};
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--embeddings') {
-      out.embeddings = out.embeddings ?? {};
-      out.embeddings.enabled = true;
-    } else if (a === '--watch') {
-      out.watch = true;
-    } else if (a === '--config' && args[i + 1]) {
-      out._configPath = args[++i];
-    } else if (a === '--home' && args[i + 1]) {
-      out.homeMemoryRoot = args[++i];
-    } else if (a === '--project-memory' && args[i + 1]) {
-      out.projectMemoryRoot = args[++i];
-    } else if (a === '--sqlite-path' && args[i + 1]) {
-      out.sqlitePath = args[++i];
-    }
+function loadCliConfig(argv = process.argv.slice(3)) {
+  const overrides = {};
+  const toolArgs = [];
+  let explicitPath;
+  for (let i = 0; i < argv.length; i++) {
+    const flag = argv[i];
+    if (['--embeddings', '--no-embeddings'].includes(flag)) overrides.embeddings = { enabled: flag === '--embeddings' };
+    else if (['--watch', '--no-watch'].includes(flag)) overrides.watch = flag === '--watch';
+    else if (['--config', '--sqlite-path'].includes(flag)) {
+      const value = argv[++i];
+      if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
+      if (flag === '--config') explicitPath = path.resolve(value); else overrides.sqlitePath = path.resolve(value);
+    } else toolArgs.push(flag);
   }
-  return out;
-}
-
-/** Resolve config file path: --config, MIXGRAM_CONFIG, ./.mixgram/config.json, ~/.mixgram/config.json */
-function resolveConfigPath(explicitPath) {
-  if (explicitPath) return path.resolve(explicitPath);
-  const envPath = process.env.MIXGRAM_CONFIG;
-  if (envPath) return path.resolve(envPath);
-  const cwd = process.cwd();
-  const local = path.join(cwd, '.mixgram', 'config.json');
-  if (fs.existsSync(local)) return local;
-  const global = path.join(os.homedir(), '.mixgram', 'config.json');
-  if (fs.existsSync(global)) return global;
-  return null;
-}
-
-/** baseDir for path resolution: project root when config is in .mixgram/config.json, else config dir. */
-function getBaseDir(configPath) {
-  if (!configPath) return process.cwd();
-  const dir = path.dirname(configPath);
-  return path.basename(dir) === '.mixgram' ? path.dirname(dir) : dir;
-}
-
-/** Load config from file + env + argv. */
-function loadCliConfig() {
-  const argvOverrides = parseMcpArgs();
-  const configPath = resolveConfigPath(argvOverrides._configPath);
-  const baseDir = getBaseDir(configPath);
-
-  let fileConfig = {};
-  if (configPath) {
-    try {
-      fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    } catch (e) {
-      console.error('Could not read config from', configPath, e.message);
-      process.exit(1);
-    }
+  const candidates = [path.resolve('.mixgram/v2/config.json'), path.join(os.homedir(), '.mixgram/v2/config.json')];
+  const configPath = explicitPath ?? process.env.MIXGRAM_CONFIG ?? candidates.find(p => fs.existsSync(p));
+  const file = configPath ? JSON.parse(fs.readFileSync(configPath, 'utf8')) : {};
+  const env = {};
+  for (const [variable, key] of [['MIXGRAM_WATCH', 'watch'], ['MIXGRAM_EMBEDDINGS_ENABLED', 'embeddings']]) {
+    const value = process.env[variable];
+    if (value === undefined) continue;
+    if (!['1','0','true','false'].includes(value)) throw new Error(`Invalid boolean for ${variable}`);
+    const enabled = value === '1' || value === 'true';
+    env[key] = key === 'embeddings' ? { enabled } : enabled;
   }
-
-  const envOverrides = {};
-  if (process.env.MIXGRAM_EMBEDDINGS_ENABLED === '1' || process.env.MIXGRAM_EMBEDDINGS_ENABLED === 'true') {
-    envOverrides.embeddings = { ...(fileConfig.embeddings || {}), enabled: true };
-  }
-  if (process.env.MIXGRAM_HOME) envOverrides.homeMemoryRoot = process.env.MIXGRAM_HOME;
-  if (process.env.MIXGRAM_PROJECT_MEMORY) envOverrides.projectMemoryRoot = process.env.MIXGRAM_PROJECT_MEMORY;
-  if (process.env.MIXGRAM_SQLITE_PATH) envOverrides.sqlitePath = process.env.MIXGRAM_SQLITE_PATH;
-  if (process.env.MIXGRAM_WATCH === '1' || process.env.MIXGRAM_WATCH === 'true') envOverrides.watch = true;
-
-  const { _configPath, ...argvRest } = argvOverrides;
-  const merged = { ...fileConfig, ...envOverrides };
-  Object.assign(merged, argvRest);
-  if (argvRest.embeddings && typeof merged.embeddings === 'object') {
-    merged.embeddings = { ...merged.embeddings, ...argvRest.embeddings };
-  }
-  const projectBaseDir = process.cwd();
-  return { overrides: merged, baseDir, projectBaseDir };
+  if (process.env.MIXGRAM_SQLITE_PATH) env.sqlitePath = path.resolve(process.env.MIXGRAM_SQLITE_PATH);
+  return { overrides: mergeConfig(file, env, overrides), baseDir: configPath ? path.dirname(path.resolve(configPath)) : process.cwd(), toolArgs };
 }
 
 const MIXGRAM_ENTRY = {
@@ -108,7 +58,7 @@ const MIXGRAM_ENTRY = {
 
 const CURSOR_MIXGRAM_ENTRY = {
   command: 'mixgram',
-  args: ['mcp', '--project-memory', '${workspaceFolder}/docs']
+  args: ['mcp']
 };
 
 function cursorMcpPath() {
@@ -211,42 +161,13 @@ args = ["mcp"]
 }
 
 function printHelp() {
-  const toolList = listToolNames();
-  const toolLines = toolList.length ? `  ${toolList.join(', ')}\n\n` : '';
-  console.log(`
-Usage: mixgram <command> [options]
-
-Commands:
-  mcp [options]        Run the MCP server (stdio). Use this in your client config.
-  setup <client>       Register Mixgram with an MCP client.
-  flushdb              Delete the SQLite database file (and WAL/shm).
-  help [tool]          Show help; with optional tool name, show options for that tool.
-  -v, --version        Print version from package and exit.
-  <tool> [options]     Run an MCP tool by name. Tools:
-${toolLines}
-
-mcp options (and env / config file):
-  --config <path>      Config file (default: ./.mixgram/config.json or ~/.mixgram/config.json)
-  --embeddings         Enable semantic search (or embeddings.enabled in config)
-  --watch              Watch files and reindex on change
-  --home <path>        Home memory root (default: ~/.mixgram/docs)
-  --project-memory <path>  Project memory root (default: ./docs, relative to repo)
-  --sqlite-path <path> SQLite index path (default: ~/.mixgram/index.db)
-
-  Env: MIXGRAM_CONFIG, MIXGRAM_EMBEDDINGS_ENABLED, MIXGRAM_HOME, MIXGRAM_PROJECT_MEMORY,
-       MIXGRAM_SQLITE_PATH, MIXGRAM_WATCH
-
-Setup targets:
-  cursor               Cursor IDE
-  gemini-cli           Gemini CLI
-  codex                Codex
-
-Example (Cursor): "mixgram": { "command": "mixgram", "args": ["mcp", "--project-memory", "\${workspaceFolder}/docs"] }
-With embeddings:   "args": ["mcp", "--project-memory", "\${workspaceFolder}/docs", "--embeddings"]
-Config file:       .mixgram/config.json or ~/.mixgram/config.json
-
-  npm install -g mixgram
-`);
+  console.log(`Usage: mixgram <command> [options]
+Commands: mcp, setup <cursor|gemini-cli|codex>, help [tool], --version
+Tools: ${listToolNames().join(', ')}
+Options: --config <path>, --sqlite-path <path>, --embeddings / --no-embeddings, --watch / --no-watch
+Default config: .mixgram/v2/config.json or ~/.mixgram/v2/config.json
+Environment: MIXGRAM_CONFIG, MIXGRAM_SQLITE_PATH, MIXGRAM_EMBEDDINGS_ENABLED, MIXGRAM_WATCH
+Configure collections and defaultCollection in the config file.`);
 }
 
 async function main() {
@@ -256,33 +177,14 @@ async function main() {
   }
 
   if (SUBCOMMAND === 'mcp') {
-    const { overrides, baseDir, projectBaseDir } = loadCliConfig();
-    await run(overrides, baseDir, projectBaseDir)
+    const { overrides, baseDir, toolArgs } = loadCliConfig();
+    if (toolArgs.length) throw new Error(`Unknown options: ${toolArgs.join(' ')}`);
+    await run(overrides, baseDir)
       .then(() => {})
       .catch((err) => {
         console.error(err);
         process.exit(1);
       });
-    return;
-  }
-
-  if (SUBCOMMAND === 'flushdb') {
-    const { overrides, baseDir, projectBaseDir } = loadCliConfig();
-    const config = loadConfig(overrides, baseDir, projectBaseDir);
-    const dbPath = config.sqlitePath;
-    closeDb();
-    const removed = [];
-    for (const p of [dbPath, dbPath + '-wal', dbPath + '-shm']) {
-      if (fs.existsSync(p)) {
-        fs.unlinkSync(p);
-        removed.push(p);
-      }
-    }
-    if (removed.length) {
-      console.log('Removed:', removed.join(', '));
-    } else {
-      console.log('No database file at', dbPath);
-    }
     return;
   }
 
@@ -325,32 +227,21 @@ async function main() {
       return;
     }
     const toolDef = getToolByName(SUBCOMMAND);
-    const args = parseToolArgs(toolDef, toolArgv);
-    const { overrides, baseDir, projectBaseDir } = loadCliConfig();
-    const config = loadConfig(overrides, baseDir, projectBaseDir);
-    let cleanupEmbeddingWorker = () => {};
-    if (config.embeddings?.enabled) {
-      cleanupEmbeddingWorker = startEmbeddingWorker(config);
-    }
-    const handlers = createToolHandlers(config);
+    const { overrides, baseDir, toolArgs } = loadCliConfig();
+    const args = parseToolArgs(toolDef, toolArgs);
+    const config = loadConfig(overrides, baseDir);
+    const cleanupWorker = startEmbeddingWorker(config);
     try {
-      const result = await handlers[SUBCOMMAND](args);
-      if ((SUBCOMMAND === 'mem_save' || SUBCOMMAND === 'mem_update') && config.embeddings?.enabled) {
-        let docId = null;
-        try {
-          const out = JSON.parse(result?.content?.[0]?.text || '{}');
-          if (out.id) docId = out.id;
-        } catch (_) {}
-        if (docId) enqueueChunks(config, [docId]);
-        while (await processNextJob(config)) {}
+      if (config.indexing.reindexOnStartup && SUBCOMMAND !== 'mem_reindex') {
+        const sync = reindex(config);
+        for (const error of sync.errors) console.error(`${error.path}: ${error.error}`);
       }
-      const text = result?.content?.[0]?.text;
-      if (text != null) console.log(text);
-    } catch (err) {
-      console.error(err);
-      process.exit(1);
+      const result = await createToolHandlers(config)[SUBCOMMAND](args);
+      console.log(result.content[0].text);
+      if (result.isError) process.exitCode = 1;
     } finally {
-      cleanupEmbeddingWorker();
+      cleanupWorker();
+      closeDb(config);
     }
     return;
   }
@@ -360,4 +251,4 @@ async function main() {
   process.exit(1);
 }
 
-main();
+main().catch(error => { console.error(error.message); process.exitCode = 1; });

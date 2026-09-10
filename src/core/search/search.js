@@ -1,170 +1,76 @@
 import { getDb } from '../../db/sqlite.js';
 import { normalizeForFts } from '../indexing/indexer.js';
 
-function getBm25Weights(config) {
-  const w = config.indexing?.ftsWeights || {};
-  return [
-    w.title ?? 10,
-    w.h1 ?? 8,
-    w.h2 ?? 6,
-    w.h3 ?? 5,
-    w.h4 ?? 4,
-    w.h5 ?? 3,
-    w.h6 ?? 2,
-    w.body ?? 1
-  ];
-}
-
-// FTS5 uses "/" for NEAR (e.g. term/5) and "-" for NOT; dash-like chars between words break parsing.
-const FTS5_NEAR_SLASH = /\//g;
-const FTS5_NOT_HYPHEN = /(?<=\w)[-\u2010-\u2015\u2212](?=\w)/g; // hyphen, en/em-dash, minus
-// FTS5 operators are case-sensitive; normalizeForFts lowercases the string, so we restore them after.
-const FTS5_OPERATOR_RESTORE = [
-  [/\band\b/g, 'AND'],
-  [/\bor\b/g, 'OR'],
-  [/\bnot\b/g, 'NOT']
-];
-
-/**
- * Normalize query for FTS5: same as indexed text (NFD, remove diacritics, lowercase).
- * Replaces "/" with space so it is not interpreted as FTS5 NEAR syntax (e.g. term/5).
- * Replaces "-" (and Unicode dashes) between word chars with space so "alchemy-tycoon" is not parsed as "alchemy" NOT "tycoon".
- * Restores FTS5 operators AND, OR, NOT to uppercase after normalization (FTS5 requires them case-sensitive).
- */
-function normalizeQuery(q) {
-  if (q == null || typeof q !== 'string') return '';
-  const trimmed = q.trim();
-  const slashSafe = trimmed.replace(FTS5_NEAR_SLASH, ' ');
-  const hyphenSafe = slashSafe.replace(FTS5_NOT_HYPHEN, ' ');
-  let out = normalizeForFts(hyphenSafe);
-  for (const [re, replacement] of FTS5_OPERATOR_RESTORE) {
-    out = out.replace(re, replacement);
-  }
-  return out;
-}
-
-/**
- * @param {object} config - resolved config
- * @param {object} options
- * @param {string} options.query - search query (will be normalized for token match)
- * @param {string} [options.scopeMode] - 'project-only' | 'home-only' | 'merged'
- * @param {string} [options.project] - project name (required for project-only and merged)
- * @param {number} [options.limit] - max results
- * @returns {Array<{ documentId: string, title: string, topicKey: string, type: string, scope: string, project: string | null, created: string | null, snippet: string, score: number }>}
- */
-function search(config, options = {}) {
-  const {
-    query,
-    scopeMode = config.search?.defaultScopeMode || 'merged',
-    project = null,
-    limit = config.search?.defaultLimit ?? 10
-  } = options;
-
-  if (!query || !String(query).trim()) {
-    return [];
-  }
-
-  const db = getDb(config);
-  const q = normalizeQuery(query);
-  const weights = getBm25Weights(config);
-  const bm25Args = weights.map((w, i) => (i === 0 ? w : `, ${w}`)).join('');
-
-  let scopeCondition = '';
-  const params = [q];
-
-  if (scopeMode === 'project-only') {
-    if (!project) return [];
-    scopeCondition = ' AND d.scope = ? AND d.project = ? AND d.deleted_at IS NULL';
-    params.push('project', project);
-  } else if (scopeMode === 'home-only') {
-    scopeCondition = ' AND d.scope = ? AND d.deleted_at IS NULL';
-    params.push('home');
-  } else {
-    if (project) {
-      scopeCondition = ' AND d.deleted_at IS NULL AND (d.scope = ? OR (d.scope = ? AND d.project = ?))';
-      params.push('home', 'project', project);
-    } else {
-      scopeCondition = ' AND d.deleted_at IS NULL AND (d.scope = ? OR d.scope = ?)';
-      params.push('home', 'project');
-    }
-  }
-
-  params.push(project || '');
-  params.push(limit);
-
-  const sql = `
-    SELECT
-      f.document_id AS documentId,
-      d.title AS title,
-      d.topic_key AS topicKey,
-      d.type AS type,
-      d.scope AS scope,
-      d.project AS project,
-      d.created_at AS created,
-      d.body AS body,
-      snippet(document_fts, 1, '**', '**', '...', 24) AS snippetTitle,
-      snippet(document_fts, 8, '**', '**', '...', 64) AS snippetBody,
-      bm25(document_fts, ${bm25Args}) AS rank
-    FROM document_fts f
-    JOIN documents d ON d.id = f.document_id
-    WHERE document_fts MATCH ? ${scopeCondition}
-    ORDER BY (CASE WHEN d.scope = 'project' AND d.project = ? THEN 0 ELSE 1 END), rank
-    LIMIT ?
-  `;
-
-  const stmt = db.prepare(sql);
-  const rows = stmt.all(...params);
-
-  return rows.map((r) => {
-    const fromFts = [r.snippetTitle, r.snippetBody].filter((x) => x != null && x !== '').join(' … ');
-    const fallback = r.body != null ? String(r.body).slice(0, 200) : '';
-    const snippet = (fromFts && fromFts.trim()) || fallback || '';
-    return {
-      documentId: r.documentId,
-      title: r.title,
-      topicKey: r.topicKey,
-      type: r.type,
-      scope: r.scope,
-      project: r.project,
-      created: r.created || null,
-      snippet: String(snippet).trim(),
-      score: -Number(r.rank)
-    };
-  });
-}
-
-/**
- * Get recent context without FTS (for mem_context when no query).
- */
-function getRecentContext(config, options = {}) {
-  const { project = null, limit = config.search?.defaultLimit ?? 10 } = options;
-  const db = getDb(config);
-  let sql = `
-    SELECT d.id AS documentId, d.title, d.topic_key AS topicKey, d.type, d.scope, d.project, d.created_at AS created, d.body
-    FROM documents d
-    WHERE d.deleted_at IS NULL
-  `;
+export function documentFilter(config, { collection, type, tags = [] } = {}) {
+  if (collection && !Object.hasOwn(config.collections, collection)) throw new Error('Unknown collection');
+  const conditions = ['d.deleted_at IS NULL'];
   const params = [];
-  if (project) {
-    sql += ' AND (d.scope = ? OR (d.scope = ? AND d.project = ?))';
-    params.push('home', 'project', project);
-  } else {
-    sql += ' AND d.scope = ?';
-    params.push('home');
+  const collections = collection ? [collection] : Object.keys(config.collections);
+  conditions.push(`d.collection IN (${collections.map(() => '?').join(',')})`);
+  params.push(...collections);
+  if (type) { conditions.push('d.type = ?'); params.push(type); }
+  for (const tag of new Set(tags)) {
+    conditions.push('EXISTS (SELECT 1 FROM json_each(d.tags) WHERE value = ?)');
+    params.push(tag);
   }
-  sql += ' ORDER BY d.updated_at DESC LIMIT ?';
-  params.push(limit);
-  const rows = db.prepare(sql).all(...params);
-  return rows.map((r) => ({
-    documentId: r.documentId,
-    title: r.title,
-    topicKey: r.topicKey,
-    type: r.type,
-    scope: r.scope,
-    project: r.project,
-    created: r.created || null,
-    snippet: (r.body || '').slice(0, 300).trim()
-  }));
+  return { sql: conditions.join(' AND '), params };
 }
 
-export { search, getRecentContext, normalizeQuery, getBm25Weights };
+function normalizeQuery(query) {
+  let text = normalizeForFts(query.trim().replace(/\//g, ' ').replace(/(?<=\w)[-\u2010-\u2015\u2212](?=\w)/g, ' '));
+  for (const op of ['and', 'or', 'not']) text = text.replace(new RegExp(`\\b${op}\\b`, 'g'), op.toUpperCase());
+  return text;
+}
+
+function resultRow(config, row, score) {
+  return {
+    id: row.id, title: row.title, collection: row.collection, type: row.type, key: row.key,
+    tags: JSON.parse(row.tags), created_at: row.created_at, updated_at: row.updated_at,
+    snippet: row.body.slice(0, config.search.snippetLength), ...(score === undefined ? {} : { score })
+  };
+}
+
+export async function search(config, options = {}) {
+  const db = getDb(config);
+  const filter = documentFilter(config, options);
+  const query = options.query?.trim();
+  const limit = options.limit ?? config.search.defaultLimit;
+  const offset = options.offset ?? 0;
+  if (!Number.isInteger(limit) || limit < 1 || limit > config.search.maxLimit || !Number.isInteger(offset) || offset < 0) throw new Error('Invalid pagination');
+  if (!query) {
+    const rows = db.prepare(`SELECT d.* FROM documents d WHERE ${filter.sql} ORDER BY d.updated_at DESC,d.id ASC LIMIT ? OFFSET ?`).all(...filter.params, limit, offset);
+    return { results: rows.map(row => resultRow(config, row)), mode: 'recent', degraded: false };
+  }
+  const weights = [0, ...Object.values(config.indexing.ftsWeights)].join(',');
+  const textRows = db.prepare(`SELECT d.*,bm25(document_fts,${weights}) AS rank FROM document_fts
+    JOIN documents d ON d.id=document_fts.document_id WHERE document_fts MATCH ? AND ${filter.sql}
+    ORDER BY rank,d.id`).all(normalizeQuery(query), ...filter.params);
+  let semanticRows = [];
+  let degraded = false;
+  let reason;
+  if (config.embeddings.enabled) {
+    try {
+      if (!config.getQueryEmbedding) throw new Error('Embedding worker unavailable');
+      const { getVectorStore } = await import('../embeddings/vectorStore.js');
+      const store = await getVectorStore(config);
+      if (!store) throw new Error('Vector store unavailable');
+      const vector = await config.getQueryEmbedding(query);
+      if (!vector) throw new Error('Query embedding unavailable');
+      semanticRows = await store.search(config, vector, options);
+    } catch (error) { degraded = true; reason = error.message; }
+  }
+  const scores = new Map();
+  const add = (rows, weight) => rows.forEach((row, i) => {
+    const entry = scores.get(row.id) ?? { row, score: 0 };
+    entry.score += weight / (config.search.fusionConstant + i + 1);
+    scores.set(row.id, entry);
+  });
+  add(textRows, config.search.ftsWeight);
+  add(semanticRows, config.search.semanticWeight);
+  const ranked = [...scores.values()].sort((a,b) => b.score - a.score || a.row.id.localeCompare(b.row.id));
+  return {
+    results: ranked.slice(offset, offset + limit).map(({ row, score }) => resultRow(config, row, score)),
+    mode: config.embeddings.enabled && !degraded ? 'hybrid' : 'text', degraded,
+    ...(reason ? { reason } : {})
+  };
+}

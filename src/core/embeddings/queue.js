@@ -1,119 +1,46 @@
-/**
- * Embedding job queue: enqueue chunk ids after indexing; worker processes pending jobs.
- */
+import { randomUUID } from 'crypto';
 import { getDb } from '../../db/sqlite.js';
 
-const MODEL_NAME = 'Xenova_multilingual_e5_large';
-const STATUS = { PENDING: 'pending', PROCESSING: 'processing', COMPLETED: 'completed', FAILED: 'failed', STALE: 'stale' };
-
-/** Queue key for jobs; use a single normalized name so enqueue and process always match. */
-function getModelName(config) {
-  return MODEL_NAME;
-}
-
-/**
- * Enqueue chunks for embedding. Idempotent per chunk: existing pending/processing left as-is; completed/failed/stale replaced by pending.
- */
-function enqueueChunks(config, chunkIds) {
-  if (!config?.embeddings?.enabled || !chunkIds?.length) return;
+export function enqueueDocuments(config, ids) {
+  if (!config.embeddings.enabled) return;
   const db = getDb(config);
-  const model = getModelName(config);
   const now = new Date().toISOString();
-  const insert = db.prepare(`
-    INSERT INTO embedding_jobs (id, chunk_id, model_name, status, attempts, created_at, updated_at)
-    VALUES (?, ?, ?, ?, 0, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET status = 'pending', attempts = 0, last_error = NULL, updated_at = ?
-    WHERE embedding_jobs.status IN ('completed', 'failed', 'stale')
-  `);
-  for (const cid of chunkIds) {
-    const id = `${cid}:${model}`;
-    insert.run(id, cid, model, STATUS.PENDING, now, now, now);
-  }
+  const insert = db.prepare(`INSERT INTO embedding_jobs (id,document_id,content_hash,model_name,status,attempts,created_at,updated_at)
+    SELECT ?,id,content_hash,?,'pending',0,?,? FROM documents WHERE id=? AND deleted_at IS NULL
+    ON CONFLICT(id) DO UPDATE SET content_hash=excluded.content_hash,status='pending',attempts=0,last_error=NULL,updated_at=excluded.updated_at
+    WHERE embedding_jobs.content_hash != excluded.content_hash`);
+  for (const id of ids) insert.run(`${id}:${config.embeddings.model}`, config.embeddings.model, now, now, id);
 }
 
-/**
- * Mark jobs for these chunk ids as stale (e.g. before re-indexing the document).
- */
-function markStale(config, chunkIds) {
-  if (!chunkIds?.length) return;
+export async function processNextJob(config) {
+  if (!config.embeddings.enabled) return false;
   const db = getDb(config);
-  const model = getModelName(config);
   const now = new Date().toISOString();
-  const update = db.prepare(`
-    UPDATE embedding_jobs SET status = ?, updated_at = ? WHERE chunk_id = ? AND model_name = ?
-  `);
-  for (const cid of chunkIds) {
-    update.run(STATUS.STALE, now, cid, model);
-  }
-}
-
-/**
- * Process one pending job: load chunk content, embed, write to vector store, mark completed/failed.
- */
-async function processNextJob(config) {
-  if (!config?.embeddings?.enabled) return false;
-  const db = getDb(config);
-  const model = getModelName(config);
-  const job = db.prepare(`
-    SELECT id, chunk_id FROM embedding_jobs
-    WHERE status = ? AND model_name = ?
-    ORDER BY created_at ASC LIMIT 1
-  `).get(STATUS.PENDING, model);
+  const expired = new Date(Date.now() - config.embeddings.jobLeaseMs).toISOString();
+  const token = randomUUID();
+  const job = db.transaction(() => {
+    const next = db.prepare(`SELECT * FROM embedding_jobs WHERE model_name=? AND
+      (status='pending' OR (status='processing' AND updated_at < ?)) ORDER BY created_at,id LIMIT 1`).get(config.embeddings.model, expired);
+    if (next) db.prepare("UPDATE embedding_jobs SET status='processing',attempts=attempts+1,updated_at=?,claim=? WHERE id=?").run(now, token, next.id);
+    return next;
+  })();
   if (!job) return false;
-
-  const now = new Date().toISOString();
-  db.prepare(`UPDATE embedding_jobs SET status = ?, attempts = attempts + 1, updated_at = ? WHERE id = ?`)
-    .run(STATUS.PROCESSING, now, job.id);
-
-  let embedder;
-  let vectorStore;
+  const doc = db.prepare('SELECT id,content_hash,body FROM documents WHERE id=? AND deleted_at IS NULL').get(job.document_id);
   try {
-    const [{ getEmbedder }, { getVectorStore }] = await Promise.all([
-      import('./embedder.js'),
-      import('./vectorStore.js')
-    ]);
-    embedder = await getEmbedder(config);
-    vectorStore = await getVectorStore(config);
-    if (!embedder || !vectorStore) {
-      db.prepare(`UPDATE embedding_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`)
-        .run(STATUS.FAILED, 'embeddings not available', now, job.id);
-      return true;
-    }
-  } catch (err) {
-    db.prepare(`UPDATE embedding_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`)
-      .run(STATUS.FAILED, String(err?.message || err), now, job.id);
-    return true;
-  }
-
-  const docRow = db.prepare(`
-    SELECT id, id AS document_id, content_hash, body AS content
-    FROM documents
-    WHERE id = ?
-  `).get(job.chunk_id);
-  if (!docRow?.content) {
-    db.prepare(`UPDATE embedding_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`)
-      .run(STATUS.FAILED, 'document not found or empty body', now, job.id);
-    return true;
-  }
-
-  try {
-    const embedding = await embedder.embed(docRow.content);
-    await vectorStore.insert(config, {
-      chunk_id: docRow.id,
-      document_id: docRow.document_id,
-      content_hash: docRow.content_hash,
-      embedding
-    });
-    db.prepare(`UPDATE embedding_jobs SET status = ?, updated_at = ? WHERE id = ?`)
-      .run(STATUS.COMPLETED, now, job.id);
-  } catch (err) {
-    const maxRetries = config?.embeddings?.maxRetries ?? 3;
-    const attempts = db.prepare('SELECT attempts FROM embedding_jobs WHERE id = ?').get(job.id)?.attempts ?? 1;
-    const nextStatus = attempts >= maxRetries ? STATUS.FAILED : STATUS.PENDING;
-    db.prepare(`UPDATE embedding_jobs SET status = ?, last_error = ?, updated_at = ? WHERE id = ?`)
-      .run(nextStatus, String(err?.message || err), now, job.id);
+    if (!doc) { db.prepare('DELETE FROM embedding_jobs WHERE id=? AND claim=?').run(job.id, token); return true; }
+    const [{ getEmbedder }, { getVectorStore }] = await Promise.all([import('./embedder.js'), import('./vectorStore.js')]);
+    const embedder = await getEmbedder(config);
+    const store = await getVectorStore(config);
+    const embedding = await embedder.embed(doc.body);
+    const current = db.prepare('SELECT content_hash,deleted_at FROM documents WHERE id=?').get(doc.id);
+    if (!current || current.deleted_at || current.content_hash !== doc.content_hash) return true;
+    await store.insert(config, { id: doc.id, content_hash: doc.content_hash, embedding });
+    db.prepare("UPDATE embedding_jobs SET status='completed',last_error=NULL WHERE id=? AND claim=? AND content_hash=? AND status='processing'")
+      .run(job.id, token, doc.content_hash);
+  } catch (error) {
+    const status = job.attempts + 1 >= config.embeddings.maxRetries ? 'failed' : 'pending';
+    db.prepare("UPDATE embedding_jobs SET status=?,last_error=? WHERE id=? AND claim=? AND content_hash=? AND status='processing'")
+      .run(status, error.message, job.id, token, job.content_hash);
   }
   return true;
 }
-
-export { enqueueChunks, markStale, processNextJob, getModelName, STATUS };
