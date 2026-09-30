@@ -1,6 +1,6 @@
 {
   "name": "mixgram",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "General-purpose Markdown memory with collections, tags, text and semantic search over MCP and CLI.",
   "keywords": [
     "mcp",
