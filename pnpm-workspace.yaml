@@ -32,6 +32,7 @@ minimumReleaseAgeExclude:
   - hono@4.12.14
   - js-yaml@3.15.0
 overrides:
+  smol-toml@<1.9.0: 1.9.1
   hono@>=4.12.4 <4.13.11: 4.13.11
   brace-expansion@>=4.0.0 <5.0.12: '5.0.12'
   fast-uri@>=3.0.0 <3.1.8: '3.1.8'
