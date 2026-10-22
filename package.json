@@ -1,6 +1,6 @@
 {
   "name": "mixgram",
-  "version": "2.0.6",
+  "version": "2.0.7",
   "description": "General-purpose Markdown memory with collections, tags, text and semantic search over MCP and CLI.",
   "keywords": [
     "mcp",
@@ -45,7 +45,7 @@
     "quality": "npm run duplication && npm run deadcode"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.8.1",
+    "@huggingface/transformers": "^4.3.1",
     "@modelcontextprotocol/sdk": "^1.32.1",
     "better-sqlite3": "^12.6.2",
     "chokidar": "^4.0.3",

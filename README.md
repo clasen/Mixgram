@@ -69,6 +69,8 @@ When embeddings are enabled, ranks are fused using `weight / (fusionConstant + r
 
 Embeddings are optional at runtime. Model and native vector packages remain installed dependencies. The model runs in a child process; saves queue work and do not wait for model inference. Keep `mixgram mcp --embeddings` running to process queued documents, including saves made by one-off CLI commands. A one-off command does not wait for its entire embedding queue to drain. If the worker or vector store fails, search returns textual results with `degraded: true` and a reason. A healthy worker with no completed vectors yet may return only text matches in hybrid mode.
 
+When upgrading from Transformers.js 3 to 4, rebuild existing vectors with `mixgram mem_reindex --full --embeddings`, using the same configuration as your server. Keep `mixgram mcp --embeddings` running until `mem_stats` shows no pending or processing jobs, and check for failed jobs. Runtime changes can alter embeddings even when the model name and dimensions stay the same.
+
 ### Persistence and rebuilding
 
 Frontmatter stores `id`, `title`, `type`, `key`, `tags`, `created_at`, `updated_at` and nullable `deleted_at`. Dates use UTC ISO 8601 strings. The body preserves its content, including empty content. Collection is derived from the configured root containing the file.
